@@ -14,7 +14,7 @@ export default function LegacyTrackPage({ params }: PageProps<"/legacy/track/[tr
   return (
     <PageContainer>
       <QueryResult loading={loading} error={error} data={data}>
-        {data ? <TrackDetail track={data.track} /> : null}
+        {({ track }) => <TrackDetail track={track} />}
       </QueryResult>
     </PageContainer>
   );

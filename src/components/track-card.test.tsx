@@ -1,8 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
 import { trackHref } from "@/lib/patterns";
 import { TrackCard } from "./track-card";
+
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 const track: TrackCard_TrackFragment = {
   __typename: "Track",
@@ -20,9 +23,15 @@ const track: TrackCard_TrackFragment = {
   },
 };
 
+const href = trackHref("rsc", track.id);
+
 describe("TrackCard", () => {
+  afterEach(() => {
+    push.mockReset();
+  });
+
   it("renders the track summary and links to the detail page", () => {
-    render(<TrackCard track={track} href={trackHref("rsc", "c_0")} onOpen={vi.fn()} />);
+    render(<TrackCard track={track} href={href} onOpen={vi.fn(async () => undefined)} />);
 
     expect(screen.getByRole("link")).toHaveAttribute("href", "/rsc/track/c_0");
     expect(screen.getByRole("heading", { name: /cat-stronomy/i })).toBeInTheDocument();
@@ -30,12 +39,40 @@ describe("TrackCard", () => {
     expect(screen.getByText("10 modules - 39m")).toBeInTheDocument();
   });
 
-  it("reports when the card is opened", () => {
-    const onOpen = vi.fn();
-    render(<TrackCard track={track} href={trackHref("rsc", "c_0")} onOpen={onOpen} />);
+  it("increments before navigating", async () => {
+    const onOpen = vi.fn(async () => undefined);
+    render(<TrackCard track={track} href={href} onOpen={onOpen} />);
 
     fireEvent.click(screen.getByRole("link"));
 
     expect(onOpen).toHaveBeenCalledOnce();
+    await waitFor(() => expect(push).toHaveBeenCalledWith(href));
+  });
+
+  it("still navigates and logs when the increment fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onOpen = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    render(<TrackCard track={track} href={href} onOpen={onOpen} />);
+
+    fireEvent.click(screen.getByRole("link"));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith(href));
+    expect(consoleError).toHaveBeenCalledWith(
+      "Could not increment the track's view count",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  it("leaves modifier clicks to the browser", () => {
+    const onOpen = vi.fn(async () => undefined);
+    render(<TrackCard track={track} href={href} onOpen={onOpen} />);
+
+    fireEvent.click(screen.getByRole("link"), { metaKey: true });
+
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(push).not.toHaveBeenCalled();
   });
 });

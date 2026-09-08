@@ -12,6 +12,8 @@ export interface Pattern {
   title: string;
   /** Where the GraphQL request is made. */
   fetchedBy: "Server Component" | "Client Component";
+  /** Whether the server-rendered HTML already contains the track data (false: it contains the spinner). */
+  shipsDataInHtml: boolean;
   summary: string;
 }
 
@@ -24,6 +26,7 @@ export const PATTERNS: readonly Pattern[] = [
     slug: "rsc",
     title: "RSC query()",
     fetchedBy: "Server Component",
+    shipsDataInHtml: true,
     summary:
       "registerApolloClient gives one client per request. The page awaits query() and renders on the server; nothing reaches the browser cache. Mutation runs through a Server Action.",
   },
@@ -31,6 +34,7 @@ export const PATTERNS: readonly Pattern[] = [
     slug: "suspense",
     title: "useSuspenseQuery",
     fetchedBy: "Client Component",
+    shipsDataInHtml: true,
     summary:
       "The page is a Client Component. It suspends during streaming SSR, the result is transported into the browser cache, and the cache stays live after hydration.",
   },
@@ -38,6 +42,7 @@ export const PATTERNS: readonly Pattern[] = [
     slug: "preload",
     title: "PreloadQuery",
     fetchedBy: "Server Component",
+    shipsDataInHtml: true,
     summary:
       "A Server Component starts the request with PreloadQuery and a Client Component reads it with useSuspenseQuery or useReadQuery. No waterfall, and the data lands in the browser cache.",
   },
@@ -45,6 +50,7 @@ export const PATTERNS: readonly Pattern[] = [
     slug: "background",
     title: "useBackgroundQuery",
     fetchedBy: "Client Component",
+    shipsDataInHtml: true,
     summary:
       "Client-only version of preloading: the parent starts the query with useBackgroundQuery and passes a queryRef to a child that reads it with useReadQuery.",
   },
@@ -52,12 +58,13 @@ export const PATTERNS: readonly Pattern[] = [
     slug: "legacy",
     title: "useQuery",
     fetchedBy: "Client Component",
+    shipsDataInHtml: false,
     summary:
       "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
   },
 ];
 
-export const tracksHref = (slug: PatternSlug): Route => `/${slug}` as Route;
+export const tracksHref = (slug: PatternSlug): Route => `/${slug}`;
 
 export const trackHref = (slug: PatternSlug, trackId: string): Route =>
   `/${slug}/track/${trackId}` as Route;

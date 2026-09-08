@@ -1,4 +1,8 @@
+import { loadEnvConfig } from "@next/env";
 import { defineConfig, devices } from "@playwright/test";
+
+// Same .env resolution as Next.js, so the tests target the endpoint the app talks to.
+loadEnvConfig(process.cwd());
 
 const PORT = 3000;
 

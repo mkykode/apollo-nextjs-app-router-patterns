@@ -4,8 +4,9 @@ const nextConfig: NextConfig = {
   typedRoutes: true,
   images: {
     remotePatterns: [
-      { protocol: "https", hostname: "res.cloudinary.com" },
-      { protocol: "https", hostname: "images.unsplash.com" },
+      // Restricted to the paths the Odyssey API serves, so the optimizer cannot be used as an open proxy.
+      { protocol: "https", hostname: "res.cloudinary.com", pathname: "/apollographql/**" },
+      { protocol: "https", hostname: "images.unsplash.com", pathname: "/photo-*" },
     ],
   },
 };

@@ -1,6 +1,6 @@
 import { InMemoryCache, gql } from "@apollo/client";
 import { MockedProvider } from "@apollo/client/testing/react";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import { describe, expect, it } from "vitest";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
@@ -46,7 +46,7 @@ describe("useIncrementTrackViews", () => {
     );
     const { result } = renderHook(() => useIncrementTrackViews(), { wrapper });
 
-    const response = await result.current("c_0");
+    const response = await act(() => result.current("c_0"));
 
     expect(response.data?.incrementTrackViews.success).toBe(true);
     expect(cache.extract()["Track:c_0"]).toMatchObject({ numberOfViews: 52 });

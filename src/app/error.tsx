@@ -7,6 +7,7 @@ import styles from "./error.module.css";
 /**
  * Nearest error boundary for every route. Suspense hooks (useSuspenseQuery, useReadQuery)
  * and awaited RSC queries throw here; useQuery does not, it returns `error` instead.
+ * `retry()` re-fetches and re-renders the segment; `reset()` would only re-render.
  *
  * In production, Next.js redacts errors thrown during Server Component rendering
  * (React error #441) and only forwards a digest, so the GraphQL message is visible in
@@ -14,10 +15,10 @@ import styles from "./error.module.css";
  */
 export default function RouteError({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   return (
     <PageContainer>
@@ -25,7 +26,7 @@ export default function RouteError({
         <h2>Houston, something went wrong</h2>
         <pre className={styles.message}>{error.message}</pre>
         {error.digest ? <p className={styles.digest}>Digest: {error.digest}</p> : null}
-        <Button onClick={reset}>Try again</Button>
+        <Button onClick={retry}>Try again</Button>
       </section>
     </PageContainer>
   );

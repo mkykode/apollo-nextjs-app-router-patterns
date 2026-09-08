@@ -25,7 +25,7 @@ export function TrackDetail({ track }: { track: TrackDetail_TrackFragment }) {
           height={400}
           sizes="(min-width: 800px) 800px, 100vw"
           className={styles.coverImage}
-          priority
+          preload
         />
       ) : null}
       <div className={styles.trackDetails}>
@@ -37,11 +37,11 @@ export function TrackDetail({ track }: { track: TrackDetail_TrackFragment }) {
             <h4>Track details</h4>
             <div className={styles.iconAndLabel}>
               <IconView size={16} />
-              <div className={styles.viewCount}>{numberOfViews} view(s)</div>
+              <div className={styles.viewCount}>{numberOfViews ?? 0} view(s)</div>
             </div>
             <div className={styles.iconAndLabel}>
               <IconBook size={14} />
-              <div>{modulesCount} modules</div>
+              <div>{modulesCount ?? 0} modules</div>
             </div>
             <div className={styles.iconAndLabel}>
               <IconTime size={14} />

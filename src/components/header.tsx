@@ -12,7 +12,7 @@ export function Header() {
         <div className={styles.homeButtonContainer}>
           <Link href="/" className={styles.homeLink}>
             <div className={styles.homeButton}>
-              <Image src={logo} alt="" width={60} height={60} className={styles.logo} priority />
+              <Image src={logo} alt="" width={60} height={60} className={styles.logo} />
               <div className={styles.title}>
                 <h3>Catstronaut</h3>
                 <div>Kitty space academy</div>

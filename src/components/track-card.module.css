@@ -105,3 +105,8 @@
 .trackLength {
   font-size: 0.8em;
 }
+
+.card[aria-busy="true"] {
+  opacity: 0.7;
+  cursor: progress;
+}

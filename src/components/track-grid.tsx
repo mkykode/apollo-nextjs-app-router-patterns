@@ -15,7 +15,7 @@ interface TrackGridProps {
    * Increments the view count. Either the useMutation callback (Client Component pages)
    * or the Server Action (RSC page): both are serializable across the RSC boundary.
    */
-  onOpenTrack: (trackId: string) => unknown;
+  onOpenTrack: (trackId: string) => Promise<unknown>;
 }
 
 /** Client Component so it can bind per-card click handlers; the page decides how the mutation runs. */
@@ -26,7 +26,7 @@ export function TrackGrid({ tracks, pattern, onOpenTrack }: TrackGridProps) {
       track={track}
       href={trackHref(pattern, track.id)}
       onOpen={() => onOpenTrack(track.id)}
-      priority={index < ABOVE_THE_FOLD}
+      eager={index < ABOVE_THE_FOLD}
     />
   ));
 }

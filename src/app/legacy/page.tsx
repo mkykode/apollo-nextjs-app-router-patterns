@@ -20,11 +20,9 @@ export default function LegacyTracksPage() {
   return (
     <PageContainer grid>
       <QueryResult loading={loading} error={error} data={data}>
-        <TrackGrid
-          tracks={data?.tracksForHome ?? []}
-          pattern="legacy"
-          onOpenTrack={incrementTrackViews}
-        />
+        {({ tracksForHome }) => (
+          <TrackGrid tracks={tracksForHome} pattern="legacy" onOpenTrack={incrementTrackViews} />
+        )}
       </QueryResult>
     </PageContainer>
   );

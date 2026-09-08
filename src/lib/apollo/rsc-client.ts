@@ -25,9 +25,10 @@ export const { getClient, query, PreloadQuery } = registerApolloClient(
       cache: new InMemoryCache(),
       link: new HttpLink({
         uri: GRAPHQL_URI,
-        // Next.js fetch options go here, for example `next: { revalidate: 60 }`
-        // to cache GraphQL responses in the Data Cache. View counts must stay live,
-        // so this app opts out (the default in Next.js 15+).
+        // Next.js fetch options go here. `no-store` keeps responses out of the Data Cache and
+        // marks every route that awaits this client as dynamic, so the RSC pages stay live even
+        // without the layout-level `dynamic = "force-dynamic"`. Use `next: { revalidate: 60 }`
+        // instead to cache GraphQL responses for a minute.
         fetchOptions: { cache: "no-store" },
       }),
     }),

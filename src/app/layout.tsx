@@ -32,8 +32,9 @@ export const viewport: Viewport = {
   themeColor: "#000000",
 };
 
-// View counts change on every click, and comparing RSC with SSR only makes sense on live data,
-// so every route renders per request instead of being prerendered at build time.
+// Client Component patterns fetch during SSR through the browser-side Apollo link, which
+// Next.js cannot see. Without this they would be prerendered at build time with a stale
+// transported cache. RSC routes are already dynamic through their `no-store` fetch option.
 export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -41,7 +42,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${sourceSans.variable} ${sourceCode.variable}`}>
       <body>
         <Header />
-        <ApolloWrapper>{children}</ApolloWrapper>
+        <ApolloWrapper>
+          {children}
+        </ApolloWrapper>
         <Footer />
       </body>
     </html>

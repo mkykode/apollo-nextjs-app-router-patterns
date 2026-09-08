@@ -8,7 +8,13 @@ import { getClient } from "@/lib/apollo/rsc-client";
  * GraphQL request is made server-side with the RSC client. Use this when the
  * page itself was rendered in RSC, because there is no browser cache to update.
  */
+const TRACK_ID = /^[\w-]{1,64}$/;
+
 export async function incrementTrackViews(trackId: string) {
+  // Every "use server" export is a public endpoint: validate before forwarding.
+  if (typeof trackId !== "string" || !TRACK_ID.test(trackId)) {
+    throw new Error("Invalid track id");
+  }
   const { data } = await getClient().mutate({
     mutation: IncrementTrackViewsDocument,
     variables: { trackId },

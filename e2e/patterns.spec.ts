@@ -31,14 +31,15 @@ for (const pattern of PATTERNS) {
 test("server-rendered patterns ship the data in the HTML, useQuery ships the spinner", async ({
   request,
 }) => {
-  for (const slug of ["rsc", "suspense", "preload", "background"]) {
+  for (const { slug, shipsDataInHtml } of PATTERNS) {
     const html = await (await request.get(`/${slug}`)).text();
-    expect(html, `/${slug} should contain the track title`).toContain(FIRST_TRACK.title);
+    if (shipsDataInHtml) {
+      expect(html, `/${slug} should contain the track title`).toContain(FIRST_TRACK.title);
+    } else {
+      expect(html, `/${slug} should not contain the track title`).not.toContain(FIRST_TRACK.title);
+      expect(html, `/${slug} should contain the spinner`).toContain('role="progressbar"');
+    }
   }
-
-  const legacy = await (await request.get("/legacy")).text();
-  expect(legacy).not.toContain(FIRST_TRACK.title);
-  expect(legacy).toContain('role="progressbar"');
 });
 
 test("useSuspenseQuery hydrates from the transported result, useQuery fetches in the browser", async ({
@@ -66,11 +67,18 @@ test("RSC pattern: opening a track runs the mutation through a Server Action", a
   request,
 }) => {
   const before = await viewCount(request);
-
   await page.goto("/rsc");
-  await page.getByRole("link", { name: FIRST_TRACK.title }).click();
-  await expect(page).toHaveURL(`/rsc/track/${FIRST_TRACK.id}`);
 
+  // Assert the mechanism (a Server Action POST), not only the shared counter, because
+  // other workers click the same card against the same live API.
+  const serverAction = page.waitForRequest(
+    (candidate) => candidate.method() === "POST" && "next-action" in candidate.headers(),
+  );
+  await page.getByRole("link", { name: FIRST_TRACK.title }).click();
+  const actionResponse = await (await serverAction).response();
+  expect(actionResponse?.ok()).toBe(true);
+
+  await expect(page).toHaveURL(`/rsc/track/${FIRST_TRACK.id}`);
   await expect.poll(() => viewCount(request)).toBeGreaterThan(before);
 });
 
@@ -88,6 +96,5 @@ test("PreloadQuery queryRef: useQueryRefHandlers refetch picks up a server-side 
   await page.getByRole("button", { name: "Refresh view count" }).click();
 
   await expect(views).not.toHaveText(`${shown} view(s)`);
-  await expect(views).toHaveText(/\d+ view\(s\)/);
   expect(Number.parseInt((await views.textContent()) ?? "", 10)).toBeGreaterThan(shown);
 });
