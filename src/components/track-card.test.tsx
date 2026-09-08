@@ -82,6 +82,23 @@ describe("TrackCard", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
+  it("navigates after the wait bound even if the increment hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      const onOpen = vi.fn(() => new Promise<void>(() => undefined));
+      render(<TrackCard track={track} href={href} onOpen={onOpen} />);
+
+      fireEvent.click(screen.getByRole("link"));
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(push).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(push).toHaveBeenCalledWith(href));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still navigates and logs when the increment fails", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onOpen = vi.fn(async () => {

@@ -21,12 +21,17 @@ interface TrackCardProps {
 const logOpenFailure = (error: unknown) =>
   console.error("Could not increment the track's view count", error);
 
+/** Upper bound on how long navigation waits for the increment; the request itself keeps running. */
+const INCREMENT_WAIT_MS = 2000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * Card for the track grid. Client Component only because of the click handler.
  *
- * The increment is awaited before navigating so the detail page never renders a count
- * that is stale by one. Modifier clicks (new tab) keep the browser's default navigation
- * and fire the mutation without waiting for it.
+ * The increment is awaited (bounded by INCREMENT_WAIT_MS) before navigating so the detail
+ * page does not render a count that is stale by one. Modifier clicks (new tab) keep the
+ * browser's default navigation and fire the mutation without waiting for it.
  */
 export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps) {
   const { title, thumbnail, author, length, modulesCount } = track;
@@ -47,7 +52,7 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
     }
     event.preventDefault();
     startTransition(async () => {
-      await onOpen().catch(logOpenFailure);
+      await Promise.race([onOpen().catch(logOpenFailure), sleep(INCREMENT_WAIT_MS)]);
       router.push(href);
     });
   };
