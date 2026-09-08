@@ -34,6 +34,11 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
   const [isPending, startTransition] = useTransition();
 
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isPending) {
+      // One increment per open: ignore clicks while the previous one is in flight.
+      event.preventDefault();
+      return;
+    }
     const opensElsewhere =
       event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
     if (opensElsewhere) {

@@ -25,9 +25,19 @@ const track: TrackCard_TrackFragment = {
 
 const href = trackHref("rsc", track.id);
 
+/** A promise the test resolves by hand, to observe ordering. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 describe("TrackCard", () => {
   afterEach(() => {
     push.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("renders the track summary and links to the detail page", () => {
@@ -39,14 +49,37 @@ describe("TrackCard", () => {
     expect(screen.getByText("10 modules - 39m")).toBeInTheDocument();
   });
 
-  it("increments before navigating", async () => {
-    const onOpen = vi.fn(async () => undefined);
+  it("waits for the increment, then navigates", async () => {
+    const increment = deferred();
+    const onOpen = vi.fn(() => increment.promise);
     render(<TrackCard track={track} href={href} onOpen={onOpen} />);
+    const link = screen.getByRole("link");
 
-    fireEvent.click(screen.getByRole("link"));
+    // fireEvent.click returns false when the handler called preventDefault (Link does not navigate).
+    expect(fireEvent.click(link)).toBe(false);
 
     expect(onOpen).toHaveBeenCalledOnce();
+    await waitFor(() => expect(link).toHaveAttribute("aria-busy", "true"));
+    expect(push).not.toHaveBeenCalled();
+
+    increment.resolve();
+
     await waitFor(() => expect(push).toHaveBeenCalledWith(href));
+  });
+
+  it("ignores clicks while an increment is in flight", async () => {
+    const increment = deferred();
+    const onOpen = vi.fn(() => increment.promise);
+    render(<TrackCard track={track} href={href} onOpen={onOpen} />);
+    const link = screen.getByRole("link");
+
+    fireEvent.click(link);
+    await waitFor(() => expect(link).toHaveAttribute("aria-busy", "true"));
+    expect(fireEvent.click(link)).toBe(false);
+
+    increment.resolve();
+    await waitFor(() => expect(push).toHaveBeenCalledOnce());
+    expect(onOpen).toHaveBeenCalledOnce();
   });
 
   it("still navigates and logs when the increment fails", async () => {
@@ -63,14 +96,14 @@ describe("TrackCard", () => {
       "Could not increment the track's view count",
       expect.any(Error),
     );
-    consoleError.mockRestore();
   });
 
   it("leaves modifier clicks to the browser", () => {
     const onOpen = vi.fn(async () => undefined);
     render(<TrackCard track={track} href={href} onOpen={onOpen} />);
 
-    fireEvent.click(screen.getByRole("link"), { metaKey: true });
+    // Default not prevented: the browser (and Link) handle the new-tab navigation.
+    expect(fireEvent.click(screen.getByRole("link"), { metaKey: true })).toBe(true);
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(push).not.toHaveBeenCalled();

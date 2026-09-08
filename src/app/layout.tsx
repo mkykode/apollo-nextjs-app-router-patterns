@@ -42,9 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${sourceSans.variable} ${sourceCode.variable}`}>
       <body>
         <Header />
-        <ApolloWrapper>
-          {children}
-        </ApolloWrapper>
+        <ApolloWrapper>{children}</ApolloWrapper>
         <Footer />
       </body>
     </html>
