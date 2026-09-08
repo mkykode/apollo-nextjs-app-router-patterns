@@ -1,5 +1,5 @@
 {
-  "name": "odyssey-client-side-graphql",
+  "name": "apollo-nextjs-app-router-patterns",
   "version": "2.0.0",
   "private": true,
   "description": "Catstronauts on Next.js 16 App Router: every Apollo Client 4 data-fetching pattern side by side",
@@ -47,5 +47,9 @@
     "vitest": "^5.0.0"
   },
   "author": "Raphael Terrier @R4ph-t",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mkykode/apollo-nextjs-app-router-patterns.git"
+  }
 }

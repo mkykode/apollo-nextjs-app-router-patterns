@@ -1,121 +1,1553 @@
-# Catstronauts on the Next.js App Router
+# Tutorial: Catstronauts on the Next.js App Router with Apollo Client 4
 
-The companion app of Odyssey's [Client-side GraphQL with React & Apollo](https://odyssey.apollographql.com/client-side-graphql-react) course, rebuilt on **Next.js 16 (App Router)** with **Apollo Client 4** and [`@apollo/client-integration-nextjs`](https://github.com/apollographql/apollo-client-integrations).
+You finished Apollo Odyssey's [Client-side GraphQL with React & Apollo](https://odyssey.apollographql.com/client-side-graphql-react). That app is a Vite single-page app: every query runs in the browser with `useQuery`. This tutorial rebuilds it on the **Next.js 16 App Router** with **Apollo Client 4** and [`@apollo/client-integration-nextjs`](https://github.com/apollographql/apollo-client-integrations), and renders the same two pages (track list, track detail) **five times, once per data-fetching pattern**, so you can compare them on live data.
 
-The course app is a Vite SPA that fetches everything with `useQuery` in the browser. This branch renders the same two pages (track catalog, track detail) **five times, one per data-fetching pattern**, so the patterns can be compared side by side on live data. Switch pattern from the header while staying on the same page and watch where the GraphQL request goes.
+By the end you will be able to:
 
-## Run it
+- set up the two Apollo Client instances an App Router app needs, and explain why there are two
+- fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
+- run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
+- handle errors, loading, and a trap in suspense error recovery
+- test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
+
+**Starting point:** the finished course app on the `main` branch of this repo. **Finished result:** the `nextjs-app-router` branch. Every step names the finished file so you can compare when stuck. **Time:** about three hours. **Prerequisites:** Node 24, pnpm 11, and the course itself.
+
+Run the finished app any time:
+
+```sh
+git checkout nextjs-app-router
+pnpm install
+pnpm dev          # http://localhost:3000
+pnpm test         # unit tests
+pnpm test:e2e     # Playwright against a production build
+```
+
+The reference material (pattern table, architecture diagram, interview talking points, known quirks) lives in [docs/patterns.md](docs/patterns.md).
+
+## Contents
+
+1. [Start from the course app](#step-1-start-from-the-course-app)
+2. [Replace the toolchain](#step-2-replace-the-toolchain)
+3. [Root layout and global styles](#step-3-root-layout-and-global-styles)
+4. [Describe the data: `.graphql` files and codegen](#step-4-describe-the-data-graphql-files-and-codegen)
+5. [Two Apollo Clients](#step-5-two-apollo-clients)
+6. [Shared UI and the pattern registry](#step-6-shared-ui-and-the-pattern-registry)
+7. [Pattern 1: RSC `query()` and a Server Action](#step-7-pattern-1-rsc-query-and-a-server-action)
+8. [Pattern 2: `useSuspenseQuery` and streaming SSR](#step-8-pattern-2-usesuspensequery-and-streaming-ssr)
+9. [Pattern 3: `PreloadQuery`](#step-9-pattern-3-preloadquery)
+10. [Pattern 4: `useBackgroundQuery`](#step-10-pattern-4-usebackgroundquery)
+11. [Pattern 5: `useQuery`, the course way](#step-11-pattern-5-usequery-the-course-way)
+12. [Errors and retry](#step-12-errors-and-retry)
+13. [Tests](#step-13-tests)
+14. [Build and ship](#step-14-build-and-ship)
+15. [What you learned](#what-you-learned)
+
+Each step ends with a **Check**. Do the check before moving on.
+
+## Step 1: Start from the course app
+
+```sh
+git checkout main
+git checkout -b my-app-router
+```
+
+Look around before changing anything. The pieces you will replace: `vite.config.ts` and `index.html` (the build), `src/pages` and `react-router-dom` (routing), `@emotion/styled` and `@apollo/space-kit` (styling), Apollo Client 3 with `uri` in the constructor, and codegen's `client-preset` with its `gql()` function.
+
+**Check:** `pnpm start` still serves the course app on port 3000. Stop it.
+
+## Step 2: Replace the toolchain
+
+Delete the files that only made sense for Vite:
+
+```sh
+git rm -r index.html vite.config.ts src/index.tsx src/pages src/react-app-env.d.ts \
+  package-lock.json public/_redirects src/__generated__ src/styles.tsx \
+  src/components/index.ts src/components/layout.tsx src/components/__tests__ \
+  src/containers src/utils src/components/module-detail.tsx src/components/modules-navigation.tsx
+```
+
+`module-detail` and `modules-navigation` were never reachable from a route in the finished course, so they go too, together with `react-player` and the window-size hook.
+
+Replace the dependency blocks in `package.json`. The versions here are the ones the finished branch uses; take the latest when you follow along.
+
+```json
+{
+  "name": "apollo-nextjs-app-router-patterns",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Catstronauts on Next.js 16 App Router: every Apollo Client 4 data-fetching pattern side by side",
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest",
+    "generate": "graphql-codegen --config codegen.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@apollo/client": "^4.2.12",
+    "@apollo/client-integration-nextjs": "^0.14.5",
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "graphql": "^17.0.2",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "rxjs": "^7.8.2",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^7.4.0",
+    "@graphql-codegen/typed-document-node": "^7.1.0",
+    "@graphql-codegen/typescript": "^6.1.0",
+    "@graphql-codegen/typescript-operations": "^6.1.6",
+    "@next/env": "16.3.4",
+    "@playwright/test": "^1.63.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "happy-dom": "^20.14.0",
+    "typescript": "^5",
+    "vitest": "^5.0.0"
+  },
+  "author": "Raphael Terrier @R4ph-t",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mkykode/apollo-nextjs-app-router-patterns.git"
+  }
+}
+```
+
+pnpm blocks postinstall scripts unless allowed:
+
+```yaml
+# pnpm-workspace.yaml
+allowBuilds:
+  esbuild: true
+  sharp: false
+  unrs-resolver: false
+```
+
+Install, then add the three config files.
 
 ```sh
 pnpm install
-pnpm dev          # http://localhost:3000
-pnpm build && pnpm start
-pnpm test         # vitest + testing-library
-pnpm test:e2e     # playwright against a production build (pnpm build && pnpm start)
-pnpm lint && pnpm typecheck
-pnpm generate     # graphql-codegen against the live schema
 ```
 
-The GraphQL endpoint defaults to the Odyssey Lift-off server. Override it with `NEXT_PUBLIC_GRAPHQL_URI` (see `.env.example`).
+```ts
+// next.config.ts
+import type { NextConfig } from "next";
 
-## The five patterns
+const nextConfig: NextConfig = {
+  typedRoutes: true,
+  images: {
+    remotePatterns: [
+      // Restricted to the paths the Odyssey API serves, so the optimizer cannot be used as an open proxy.
+      { protocol: "https", hostname: "res.cloudinary.com", pathname: "/apollographql/**" },
+      { protocol: "https", hostname: "images.unsplash.com", pathname: "/photo-*" },
+    ],
+  },
+};
 
-| Route         | Pattern                                         | GraphQL request runs                          | HTML contains                     | Browser cache after load            | Mutation                             |
-| ------------- | ----------------------------------------------- | --------------------------------------------- | --------------------------------- | ----------------------------------- | ------------------------------------ |
-| `/rsc`        | `query()` from `registerApolloClient`           | On the server, during the RSC render          | Finished markup only              | Empty. RSC data never reaches it    | Server Action → `getClient().mutate` |
-| `/suspense`   | `useSuspenseQuery` in a Client Component        | On the server during streaming SSR            | Markup + transported result       | Warm and live, no refetch           | `useMutation`                        |
-| `/preload`    | `PreloadQuery` → `useSuspenseQuery` / `useReadQuery` | Started in RSC, consumed by Client Components | Markup + transported `queryRef`   | Warm and live, `refetch` available  | `useMutation`                        |
-| `/background` | `useBackgroundQuery` + `useReadQuery`           | Server during SSR, like `/suspense`           | Markup + transported result       | Warm and live                       | `useMutation`                        |
-| `/legacy`     | `useQuery` (the course way)                     | In the browser, after hydration               | Loading spinner                   | Warm after the client fetch         | `useMutation`                        |
-
-Verify it yourself: `curl -s localhost:3000/rsc | grep Cat-stronomy` finds the data, `curl -s localhost:3000/legacy | grep progressbar` finds the spinner.
-
-## How the pieces fit
-
-```mermaid
-flowchart LR
-  subgraph server[Server]
-    RSC["Server Components<br/>registerApolloClient → getClient · query · PreloadQuery<br/>src/lib/apollo/rsc-client.ts"]
-    SSR["Client Components, SSR pass<br/>ApolloNextAppProvider · makeClient<br/>src/lib/apollo/apollo-wrapper.tsx"]
-    SA["Server Action<br/>getClient().mutate<br/>src/lib/actions/increment-track-views.ts"]
-  end
-  subgraph browser[Browser]
-    CC["Client Components<br/>ApolloNextAppProvider · makeClient (again)"]
-  end
-  GQL[(GraphQL API)]
-  RSC -->|"query()"| GQL
-  SSR -->|"useSuspenseQuery during streaming SSR"| GQL
-  SSR -. "results streamed into the HTML, hydrate the cache" .-> CC
-  RSC -. "PreloadQuery: queryRef + result" .-> CC
-  CC -->|"useMutation · refetch · useQuery"| GQL
-  SA --> GQL
+export default nextConfig;
 ```
 
-Two Apollo Client instances exist on purpose:
+`typedRoutes` makes `<Link href>` type-checked against the route tree. `remotePatterns` is required for `next/image` with remote URLs; restrict the paths, or the image optimizer becomes an open proxy.
 
-- **RSC client** (`registerApolloClient`): one instance per request, memoized with React `cache()`, shared by every Server Component and Server Action in that request. Identical queries are deduplicated. `generateMetadata` and the page on `/rsc/track/[trackId]` both call `GetTrack`; only one request leaves the server.
-- **Client Components client** (`ApolloNextAppProvider` + `makeClient`): created once on the server for the SSR pass and once in the browser. The integration's `ApolloClient` and `InMemoryCache` subclasses record every result during SSR and stream it into the HTML, so the browser hydrates a warm cache instead of refetching.
-
-Never read the same data from both. RSC data is frozen in the markup, client data keeps updating from the cache, and they will drift.
-
-**Why does a Client Component provider in the root layout not turn `/rsc` into Client Components?** `"use client"` is a boundary in the module import graph, not in the element tree. A Client Component makes the modules it *imports* client modules; whatever it receives as `children` was already rendered by the server and arrives as a slot. The layout is a Server Component that renders `<ApolloWrapper>{children}</ApolloWrapper>`, so the `/rsc` page inside is still a Server Component, and it never touches the provider: it uses `query()` from `registerApolloClient`, a different instance. React context never reaches Server Components at all. The provider exists for the Client Components underneath, at any depth: the pattern pages that call hooks, the `useMutation` inside `TrackGrid`, PreloadQuery's client children.
-
-## Where things live
-
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}
 ```
-src/
-  app/
-    layout.tsx                 root layout: fonts, header, ApolloWrapper, footer. force-dynamic
-    page.tsx                   index of the patterns
-    loading.tsx                route-level Suspense boundary
-    error.tsx                  route-level error boundary
-    rsc/ suspense/ preload/ background/ legacy/
-      page.tsx                 track list for that pattern
-      track/[trackId]/page.tsx track detail for that pattern
-  lib/
-    apollo/rsc-client.ts       registerApolloClient (server-only)
-    apollo/apollo-wrapper.tsx  ApolloNextAppProvider ("use client")
-    actions/                   Server Action running the mutation
-    hooks/                     useMutation wrapper used by client patterns
-    patterns.ts                single source of truth for routes and nav
-    graphql-uri.ts             endpoint, shared by codegen and both clients
-  graphql/tracks.graphql       page-level operations
-  components/
-    track-card.graphql         colocated fragment TrackCard_track
-    track-detail.graphql       colocated fragment TrackDetail_track
-    *.tsx + *.module.css       presentational components, Server Components unless they need a handler
-  __generated__/graphql.ts     codegen output (typescript + typescript-operations + typed-document-node)
+
+```js
+// eslint.config.mjs
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  globalIgnores([
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    "src/__generated__/**",
+  ]),
+]);
+
+export default eslintConfig;
 ```
 
-## Talking points
+`next lint` was removed in Next 16; run `eslint` directly. Finally the env example, so the endpoint can be overridden without code changes:
 
-**Why not one client?** Server Components and Client Components are separate module graphs. Server Components have no React context, so `ApolloProvider` cannot reach them, and a module-level singleton would leak data between requests. `registerApolloClient` solves both with a per-request `cache()`. Client Components need a provider, and the provider needs to run `makeClient` on both sides because the SSR pass and the browser are different processes.
+```sh
+# .env.example
+# Optional. Defaults to the Odyssey Lift-off server when unset.
+# NEXT_PUBLIC_GRAPHQL_URI=https://odyssey-lift-off-server.herokuapp.com/
+```
 
-**Why `useSuspenseQuery` instead of `useQuery` in the App Router?** Streaming SSR renders Client Components on the server. A hook that suspends lets the server wait for the data and send finished markup. `useQuery` never suspends, so the server sends the loading state and the browser fetches after hydration: an extra round trip and a spinner on first paint (compare `/legacy` with `/suspense`).
+**Check:** `pnpm exec next --version` prints `Next.js 16.x`, and `pnpm lint` runs without complaining about the config.
 
-**When to use `PreloadQuery`?** When the data belongs to a Client Component (it must stay live, or it drives interaction) but you want the request to start as early as possible, in RSC, without a waterfall and without a duplicated fetch. The render-prop form hands a `queryRef` to the child, which reads it with `useReadQuery` and gets `refetch`/`fetchMore` from `useQueryRefHandlers` (call it before `useReadQuery`). `useBackgroundQuery` is the client-only version of the same idea.
+## Step 3: Root layout and global styles
 
-**Mutations and the cache.** `IncrementTrackViews` selects `track { id numberOfViews }`. The normalized cache identifies `Track:c_0` and updates the field, so every component reading that track re-renders without `refetchQueries` or a manual `update`. On `/rsc` there is no browser cache to update, so the mutation runs in a Server Action with the RSC client. The card awaits the increment before navigating (bounded to two seconds, because `HttpLink` has no timeout), so the detail page does not render a count that is stale by one, and a failed increment is logged instead of becoming an unhandled rejection.
+Emotion cannot render in Server Components, and the whole point of this rebuild is to keep components on the server unless they need a handler or a hook. So the styling moves to CSS Modules. The palette, reset, and typography that `@apollo/space-kit` used to provide become tokens in `src/app/globals.css`:
 
-**Errors.** Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Passing `errorPolicy: "none"` explicitly narrows `data` to a defined value in TypeScript. The boundary's `retry()` (Next 16.3) re-fetches the segment; `reset()` only re-renders it. One trap: Suspense hooks keep a rejected result in their suspense cache until it auto-disposes (30 s by default), so `retry()` alone re-throws the same error. `error.tsx` refetches the still-watched queries before calling `retry()`; `e2e/error-recovery.spec.ts` proves the recovery by blocking GraphQL during a client-side navigation and lifting the block. In production, errors thrown while rendering Server Components are redacted (React error #441) and only a `digest` reaches the boundary.
+```css
+:root {
+  --pink-base: #f25cc1;
+  --pink-light: #ffa3e0;
+  --silver-light: #f4f6f8;
+  --grey-dark: #5a6270;
+  --black-base: #191c23;
+  /* ...the full space-kit palette is in the file... */
 
-**Caching layers.** Apollo's `InMemoryCache` is per instance (per request on the server, per tab in the browser). Next.js adds the fetch Data Cache on top: `HttpLink({ fetchOptions: { next: { revalidate: 60 } } })` or `context.fetchOptions` per query. This app opts out with `cache: "no-store"` on the RSC link, which also marks the RSC routes dynamic. The Client Component patterns fetch during SSR through the browser-side link, which Next.js cannot see, so the root layout also sets `dynamic = "force-dynamic"`; without it they would be prerendered at build time with a stale transported cache. Under Cache Components (`cacheComponents: true`) neither would be needed, but the integration's SSR transport under a partially prerendered shell is unverified, so this branch stays on the classic model.
+  --color-accent: var(--pink-base);
+  --color-background: var(--silver-light);
+  --color-text: var(--black-base);
+  --color-text-secondary: var(--grey-dark);
 
-**Codegen and fragments.** Operations live in `.graphql` files. Each component owns a fragment named `Component_prop` and the page query spreads it, so the query mirrors the component tree. Codegen emits typed documents; hooks infer `data` from them, never from manual generics. Apollo's data masking (`dataMasking: true` + `useFragment`) is deliberately off: masking is unmasked through the client cache, and the same presentational components render RSC data here, which never enters that cache.
+  --width-regular-page: 1100px;
+  --width-text-page: 800px;
+}
 
-**`@defer`.** If a query uses `@defer`, the SSR pass would render partial data while the request keeps streaming. Wrap the SSR link in `SSRMultipartLink` (strip or accumulate) or use `PreloadQuery` with `useReadQuery`, which transports deferred chunks fully. Not needed for this schema.
+body {
+  margin: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-sans), sans-serif;
+  background-color: var(--color-background);
+  background-image: url("/space_kitty_pattern.png");
+  color: var(--color-text);
+}
+```
 
-**Testing.** Unit tests cover presentational components and the mutation hook with `MockedProvider` from `@apollo/client/testing/react`, asserting on the cache after the mutation. Async Server Components cannot be unit-tested with Vitest, so `e2e/patterns.spec.ts` proves the pattern differences in a real browser: the server-rendered routes contain the data in their HTML while `/legacy` contains the spinner, `/suspense` makes zero browser GraphQL requests while `/legacy` makes one, the Server Action increments the view count, and the `queryRef` refetch picks up a server-side change.
+Copy the complete file from `src/app/globals.css`. Two things to notice while you port the emotion styles: the course's `PageContainer` declared `padding: 16` without a unit, which browsers drop, so the real layout has no padding; and the `#root` rules move to `body`, because the App Router has no root div.
 
-## What changed from the course app
+Now the root layout. Fonts come from `next/font` instead of the Google Fonts `@font-face` block space-kit shipped:
 
-- React Router → App Router file routes, `next/link`, `PageProps`/`LayoutProps` typed params, `typedRoutes`.
-- Apollo Client 3 → 4: hooks import from `@apollo/client/react`, `link: new HttpLink()` instead of the `uri` shorthand, `ErrorLike` replaces `ApolloError`, `rxjs` peer dependency, `MockedProvider` moves to `@apollo/client/testing/react`.
-- `client-preset` and `gql()` → `.graphql` documents with `typed-document-node`, following the Apollo Client 4 skill.
-- Emotion and `@apollo/space-kit` → CSS Modules, `next/font` (Source Sans 3, Source Code Pro), inlined space-kit icons. Every component that has no handler is a Server Component.
-- `<img>` → `next/image` with `remotePatterns` for Cloudinary and Unsplash.
+```tsx
+// src/app/layout.tsx
+import type { Metadata, Viewport } from "next";
+import { Source_Code_Pro, Source_Sans_3 } from "next/font/google";
+import "./globals.css";
+import { Footer } from "@/components/footer";
+import { Header } from "@/components/header";
+import { ApolloWrapper } from "@/lib/apollo/apollo-wrapper";
 
-## Known quirks
+const sourceSans = Source_Sans_3({
+  subsets: ["latin"],
+  variable: "--font-sans",
+});
 
-- **`Warning: fragment with name TrackDetail_track already exists`** in the console on `/preload` pages. `@apollo/client-react-streaming` revives a transported query with `gql(print(gql(options.query)))`; graphql-tag registers the fragment once from the compact string and once from the pretty-printed one and warns. Cosmetic, upstream, only for documents with fragments. It shows in the server log and in the browser console.
-- Unknown track ids: the Odyssey server answers HTTP 404, which Apollo surfaces as `ServerError` and the error boundary displays.
+const sourceCode = Source_Code_Pro({
+  subsets: ["latin"],
+  variable: "--font-mono",
+});
+
+export const metadata: Metadata = {
+  title: {
+    default: "Catstronauts",
+    template: "%s | Catstronauts",
+  },
+  description: "Apollo Client 4 data-fetching patterns on the Next.js App Router",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/logo192.png",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#000000",
+};
+
+// Client Component patterns fetch during SSR through the browser-side Apollo link, which
+// Next.js cannot see. Without this they would be prerendered at build time with a stale
+// transported cache. RSC routes are already dynamic through their `no-store` fetch option.
+export const dynamic = "force-dynamic";
+
+export default function RootLayout({ children }: LayoutProps<"/">) {
+  return (
+    <html lang="en" className={`${sourceSans.variable} ${sourceCode.variable}`}>
+      <body>
+        <Header />
+        <ApolloWrapper>{children}</ApolloWrapper>
+        <Footer />
+      </body>
+    </html>
+  );
+}
+```
+
+`ApolloWrapper` does not exist yet; you write it in Step 5. Leave the import in and keep going, or comment it out until then.
+
+Port the presentational components next. Each one gets a `.module.css` next to it. None of them needs `"use client"`:
+
+| Component | Finished file | Notes |
+| --- | --- | --- |
+| Header | `src/components/header.tsx` | Renders `PatternNav` (Step 6). Logo through `next/image` with a static import. |
+| Footer | `src/components/footer.tsx` | Uses the inlined `ApolloIcon`. |
+| PageContainer | `src/components/page-container.tsx` | `<main>` with an optional `grid` mode. |
+| Loading | `src/components/loading.tsx` | The space-kit spinner as inline SVG with a CSS keyframe. |
+| Button | `src/components/button.tsx` | Space-kit's large raised pink button, in CSS. |
+| Icons | `src/components/icons.tsx` | Space-kit's SVG paths, inlined so they render on the server. |
+| ContentSection, MarkdownContent | `src/components/content-section.tsx`, `src/components/md-content.tsx` | `react-markdown` 10 works in Server Components. |
+
+Add a placeholder home page so the app renders:
+
+```tsx
+// src/app/page.tsx (temporary)
+import { PageContainer } from "@/components/page-container";
+
+export default function HomePage() {
+  return (
+    <PageContainer>
+      <h1>Catstronauts</h1>
+    </PageContainer>
+  );
+}
+```
+
+**Check:** `pnpm dev`, open http://localhost:3000. Header, pink title, footer, kitty background. No console errors.
+
+## Step 4: Describe the data: `.graphql` files and codegen
+
+The course generated types with `client-preset` and a `gql()` function. The Apollo Client 4 recommendation is `typescript` + `typescript-operations` + `typed-document-node`, with operations in `.graphql` files. Hooks then infer their types from the document, and you never write `useQuery<Data, Vars>` generics again.
+
+One endpoint constant, shared by codegen and both clients:
+
+```ts
+// src/lib/graphql-uri.ts
+/**
+ * Single source of truth for the GraphQL endpoint.
+ * Read by codegen (schema introspection), the RSC client, and the browser/SSR client.
+ * Must be absolute: relative URLs cannot be fetched during server rendering.
+ */
+export const GRAPHQL_URI =
+  process.env.NEXT_PUBLIC_GRAPHQL_URI ??
+  "https://odyssey-lift-off-server.herokuapp.com/";
+```
+
+```ts
+// codegen.ts
+import type { CodegenConfig } from "@graphql-codegen/cli";
+import { GRAPHQL_URI } from "./src/lib/graphql-uri";
+
+/**
+ * Apollo's recommended codegen setup for Apollo Client 4:
+ * typescript + typescript-operations + typed-document-node.
+ * Operations live in .graphql files; fragments are colocated with the component that owns them.
+ */
+const config: CodegenConfig = {
+  overwrite: true,
+  schema: GRAPHQL_URI,
+  documents: ["src/**/*.graphql"],
+  ignoreNoDocuments: true,
+  generates: {
+    "./src/__generated__/graphql.ts": {
+      plugins: ["typescript", "typescript-operations", "typed-document-node"],
+      config: {
+        avoidOptionals: { field: true, inputValue: false },
+        defaultScalarType: "unknown",
+        nonOptionalTypename: true,
+        skipTypeNameForRoot: true,
+      },
+    },
+  },
+};
+
+export default config;
+```
+
+Each component owns a fragment named `Component_prop`, colocated with the component. Page queries spread those fragments, so the query mirrors the component tree.
+
+```graphql
+# src/components/track-card.graphql
+# Colocated fragment: exactly the fields TrackCard renders, nothing more.
+fragment TrackCard_track on Track {
+  id
+  title
+  thumbnail
+  length
+  modulesCount
+  author {
+    id
+    name
+    photo
+  }
+}
+```
+
+```graphql
+# src/components/track-detail.graphql
+# Colocated fragment: exactly the fields TrackDetail renders.
+fragment TrackDetail_track on Track {
+  id
+  title
+  description
+  thumbnail
+  length
+  modulesCount
+  numberOfViews
+  author {
+    id
+    name
+    photo
+  }
+  modules {
+    id
+    title
+    length
+  }
+}
+```
+
+```graphql
+# src/graphql/tracks.graphql
+# Page-level operations. Each page has one query composed from colocated component fragments.
+
+query GetTracks {
+  tracksForHome {
+    id
+    ...TrackCard_track
+  }
+}
+
+query GetTrack($trackId: ID!) {
+  track(id: $trackId) {
+    id
+    ...TrackDetail_track
+  }
+}
+
+# The response selects `track { id numberOfViews }` so the normalized cache
+# updates the Track entity automatically: no manual cache write, no refetch.
+mutation IncrementTrackViews($trackId: ID!) {
+  incrementTrackViews(id: $trackId) {
+    code
+    success
+    message
+    track {
+      id
+      numberOfViews
+    }
+  }
+}
+```
+
+Generate:
+
+```sh
+pnpm generate
+```
+
+**Check:** `src/__generated__/graphql.ts` exports `GetTracksDocument`, `GetTrackDocument`, `IncrementTrackViewsDocument`, and the fragment types `TrackCard_TrackFragment` and `TrackDetail_TrackFragment`. Commit the generated file; the app must build without the live API.
+
+## Step 5: Two Apollo Clients
+
+An App Router app has two module graphs. Server Components run once per request on the server and have no React context. Client Components run twice: on the server during streaming SSR, and again in the browser. Each world needs its own Apollo Client.
+
+First, Apollo's dev messages, loaded outside production only:
+
+```ts
+// src/lib/apollo/dev-messages.ts
+import { loadDevMessages, loadErrorMessages } from "@apollo/client/dev";
+
+// Apollo Client 4 ships error messages as an opt-in bundle; load them outside production only.
+if (process.env.NODE_ENV === "development") {
+  loadDevMessages();
+  loadErrorMessages();
+}
+```
+
+The Server Component client. `registerApolloClient` wraps your factory in React's `cache()`, so every Server Component and Server Action in one request shares an instance and identical queries are deduplicated. `import "server-only"` turns any accidental client import into a build error.
+
+```ts
+// src/lib/apollo/rsc-client.ts
+import "server-only";
+import "./dev-messages";
+import { HttpLink } from "@apollo/client";
+import {
+  ApolloClient,
+  InMemoryCache,
+  registerApolloClient,
+} from "@apollo/client-integration-nextjs";
+import { GRAPHQL_URI } from "@/lib/graphql-uri";
+
+/**
+ * Apollo Client for React Server Components and Server Actions.
+ *
+ * registerApolloClient wraps the factory in React's `cache()`, so every Server Component
+ * in one request shares a single client and identical queries are deduplicated.
+ * Data fetched here is rendered on the server; it never reaches the browser cache.
+ *
+ * - getClient(): the per-request client (query, mutate, readQuery...)
+ * - query(): shortcut for getClient().query()
+ * - PreloadQuery: start a request in RSC and hand the result to Client Components
+ */
+export const { getClient, query, PreloadQuery } = registerApolloClient(
+  () =>
+    new ApolloClient({
+      cache: new InMemoryCache(),
+      link: new HttpLink({
+        uri: GRAPHQL_URI,
+        // Next.js fetch options go here. `no-store` keeps responses out of the Data Cache and
+        // marks every route that awaits this client as dynamic, so the RSC pages stay live even
+        // without the layout-level `dynamic = "force-dynamic"`. Use `next: { revalidate: 60 }`
+        // instead to cache GraphQL responses for a minute.
+        fetchOptions: { cache: "no-store" },
+      }),
+    }),
+);
+```
+
+The Client Component client. `ApolloNextAppProvider` calls `makeClient` on the server for the SSR pass and again in the browser. The `ApolloClient` and `InMemoryCache` from the integration package are subclasses that record every query result during SSR, stream it into the HTML, and replay it into the browser cache, so hydration does not refetch.
+
+```tsx
+// src/lib/apollo/apollo-wrapper.tsx
+"use client";
+
+import "./dev-messages";
+import { HttpLink } from "@apollo/client";
+import {
+  ApolloClient,
+  ApolloNextAppProvider,
+  InMemoryCache,
+} from "@apollo/client-integration-nextjs";
+import type { PropsWithChildren } from "react";
+import { GRAPHQL_URI } from "@/lib/graphql-uri";
+
+/**
+ * Apollo Client for Client Components.
+ *
+ * Client Components render twice: once on the server (streaming SSR) and once in the browser.
+ * ApolloNextAppProvider calls makeClient in both environments. During SSR it records every
+ * query result and streams it into the HTML, so the browser client hydrates with a warm cache
+ * instead of refetching. The ApolloClient and InMemoryCache imported from the integration
+ * package are subclasses instrumented for that transport.
+ */
+function makeClient() {
+  return new ApolloClient({
+    cache: new InMemoryCache(),
+    link: new HttpLink({ uri: GRAPHQL_URI }),
+  });
+}
+
+export function ApolloWrapper({ children }: PropsWithChildren) {
+  return (
+    <ApolloNextAppProvider makeClient={makeClient}>
+      {children}
+    </ApolloNextAppProvider>
+  );
+}
+```
+
+You already render `<ApolloWrapper>{children}</ApolloWrapper>` in the layout from Step 3. A common worry: does a Client Component wrapper in the root layout turn every page into a Client Component? No. `"use client"` is a boundary in the module **import** graph. A Client Component makes what it imports client code; what it receives as `children` was rendered on the server already and arrives as a slot. Context never reaches Server Components, so the provider is invisible to them.
+
+**Check:** `pnpm build` succeeds. Then try it the wrong way: import `getClient` from `rsc-client.ts` inside `apollo-wrapper.tsx`. The build fails with a `server-only` error. Remove the import.
+
+## Step 6: Shared UI and the pattern registry
+
+All five patterns render the same components. The registry is the single source of truth for routes, the header navigation, the index page, and the end-to-end tests:
+
+```ts
+// src/lib/patterns.ts
+import type { Route } from "next";
+
+export type PatternSlug =
+  | "rsc"
+  | "suspense"
+  | "preload"
+  | "background"
+  | "legacy";
+
+export interface Pattern {
+  slug: PatternSlug;
+  title: string;
+  /** Where the GraphQL request is made. */
+  fetchedBy: "Server Component" | "Client Component";
+  /** Whether the server-rendered HTML already contains the track data (false: it contains the spinner). */
+  shipsDataInHtml: boolean;
+  summary: string;
+}
+
+/**
+ * Single source of truth for the demo routes.
+ * Every pattern renders the same two pages (track list, track detail) with a different data-fetching strategy.
+ */
+export const PATTERNS: readonly Pattern[] = [
+  {
+    slug: "rsc",
+    title: "RSC query()",
+    fetchedBy: "Server Component",
+    shipsDataInHtml: true,
+    summary:
+      "registerApolloClient gives one client per request. The page awaits query() and renders on the server; nothing reaches the browser cache. Mutation runs through a Server Action.",
+  },
+  {
+    slug: "suspense",
+    title: "useSuspenseQuery",
+    fetchedBy: "Client Component",
+    shipsDataInHtml: true,
+    summary:
+      "The page is a Client Component. It suspends during streaming SSR, the result is transported into the browser cache, and the cache stays live after hydration.",
+  },
+  {
+    slug: "preload",
+    title: "PreloadQuery",
+    fetchedBy: "Server Component",
+    shipsDataInHtml: true,
+    summary:
+      "A Server Component starts the request with PreloadQuery and a Client Component reads it with useSuspenseQuery or useReadQuery. No waterfall, and the data lands in the browser cache.",
+  },
+  {
+    slug: "background",
+    title: "useBackgroundQuery",
+    fetchedBy: "Client Component",
+    shipsDataInHtml: true,
+    summary:
+      "Client-only version of preloading: the parent starts the query with useBackgroundQuery and passes a queryRef to a child that reads it with useReadQuery.",
+  },
+  {
+    slug: "legacy",
+    title: "useQuery",
+    fetchedBy: "Client Component",
+    shipsDataInHtml: false,
+    summary:
+      "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
+  },
+];
+
+export const tracksHref = (slug: PatternSlug): Route => `/${slug}`;
+
+export const trackHref = (slug: PatternSlug, trackId: string): Route =>
+  `/${slug}/track/${trackId}` as Route;
+```
+
+`PatternNav` (`src/components/pattern-nav.tsx`) is the one Client Component in the header: it reads `usePathname()` and links every pattern to the same sub-path, so you can jump from `/rsc/track/c_0` to `/preload/track/c_0`. The index page (`src/app/page.tsx`) lists the registry; replace the placeholder from Step 3 with the finished file.
+
+`TrackDetail` (`src/components/track-detail.tsx`) is a plain Server Component that takes a `TrackDetail_TrackFragment`. The card and grid are Client Components, and the reason is instructive:
+
+```tsx
+// src/components/track-grid.tsx
+"use client";
+
+import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
+import { type PatternSlug, trackHref } from "@/lib/patterns";
+import { TrackCard } from "./track-card";
+
+/** Cards visible above the fold at desktop width; their images load eagerly (LCP). */
+const ABOVE_THE_FOLD = 3;
+
+interface TrackGridProps {
+  tracks: readonly TrackCard_TrackFragment[];
+  /** Which pattern's detail page the cards link to. */
+  pattern: PatternSlug;
+  /**
+   * Increments the view count. Either the useMutation callback (Client Component pages)
+   * or the Server Action (RSC page): both are serializable across the RSC boundary.
+   */
+  onOpenTrack: (trackId: string) => Promise<unknown>;
+}
+
+/** Client Component so it can bind per-card click handlers; the page decides how the mutation runs. */
+export function TrackGrid({ tracks, pattern, onOpenTrack }: TrackGridProps) {
+  return tracks.map((track, index) => (
+    <TrackCard
+      key={track.id}
+      track={track}
+      href={trackHref(pattern, track.id)}
+      onOpen={() => onOpenTrack(track.id)}
+      eager={index < ABOVE_THE_FOLD}
+    />
+  ));
+}
+```
+
+A Server Component cannot pass a closure to a Client Component; only serializable props and Server Actions cross the boundary. So the grid is a Client Component that builds the per-card closures itself, and the page passes it either the `useMutation` callback or the Server Action.
+
+```tsx
+// src/components/track-card.tsx
+"use client";
+
+import type { Route } from "next";
+import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { type MouseEvent, useTransition } from "react";
+import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
+import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import styles from "./track-card.module.css";
+
+interface TrackCardProps {
+  track: TrackCard_TrackFragment;
+  href: Route;
+  /** Increments the view count; the caller decides whether that is useMutation or a Server Action. */
+  onOpen: () => Promise<unknown>;
+  /** Load the thumbnail eagerly (above-the-fold cards). */
+  eager?: boolean;
+}
+
+const logOpenFailure = (error: unknown) =>
+  console.error("Could not increment the track's view count", error);
+
+/** Upper bound on how long navigation waits for the increment; the request itself keeps running. */
+const INCREMENT_WAIT_MS = 2000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Card for the track grid. Client Component only because of the click handler.
+ *
+ * The increment is awaited (bounded by INCREMENT_WAIT_MS) before navigating so the detail
+ * page does not render a count that is stale by one. Modifier clicks (new tab) keep the
+ * browser's default navigation and fire the mutation without waiting for it.
+ */
+export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps) {
+  const { title, thumbnail, author, length, modulesCount } = track;
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isPending) {
+      // One increment per open: ignore clicks while the previous one is in flight.
+      event.preventDefault();
+      return;
+    }
+    const opensElsewhere =
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+    if (opensElsewhere) {
+      void onOpen().catch(logOpenFailure);
+      return;
+    }
+    event.preventDefault();
+    startTransition(async () => {
+      await Promise.race([onOpen().catch(logOpenFailure), sleep(INCREMENT_WAIT_MS)]);
+      router.push(href);
+    });
+  };
+
+  return (
+    <Link href={href} className={styles.card} onClick={handleClick} aria-busy={isPending}>
+      <div className={styles.content}>
+        <div className={styles.imageContainer}>
+          {thumbnail ? (
+            <Image
+              src={thumbnail}
+              alt={title}
+              fill
+              sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
+              className={styles.image}
+              loading={eager ? "eager" : "lazy"}
+            />
+          ) : null}
+        </div>
+        <div className={styles.body}>
+          <h3 className={styles.title}>{title}</h3>
+          <div className={styles.footer}>
+            {author.photo ? (
+              <Image
+                src={author.photo}
+                alt=""
+                width={30}
+                height={30}
+                className={styles.authorImage}
+              />
+            ) : null}
+            <div className={styles.authorAndTrack}>
+              <div className={styles.authorName}>{author.name}</div>
+              <div className={styles.trackLength}>
+                {modulesCount ?? 0} modules - {humanReadableTimeFromSeconds(length ?? 0)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
+```
+
+Three details to notice: the click is intercepted so the increment completes before `router.push`, otherwise the detail page can render a count that is stale by one; the wait is bounded because `HttpLink` has no timeout; and modifier clicks are left to the browser so open-in-new-tab keeps working. Styles are in `src/components/track-card.module.css`.
+
+**Check:** `pnpm typecheck` passes. Nothing renders tracks yet.
+
+## Step 7: Pattern 1: RSC `query()` and a Server Action
+
+The page is an `async` Server Component. It awaits `query()`, and the HTML arrives complete. No Apollo code or data for this page is shipped to the browser, and the browser cache knows nothing about it.
+
+```tsx
+// src/app/rsc/page.tsx
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackGrid } from "@/components/track-grid";
+import { incrementTrackViews } from "@/lib/actions/increment-track-views";
+import { query } from "@/lib/apollo/rsc-client";
+
+/**
+ * Pattern 1: React Server Component.
+ * The GraphQL request happens on the server during render. The HTML arrives complete,
+ * no Apollo code or data is shipped for this page, and the browser cache knows nothing about it.
+ * The mutation therefore runs through a Server Action instead of useMutation.
+ *
+ * errorPolicy "none" is the default, but stating it narrows `data` to a defined value:
+ * GraphQL errors reject the promise and land in error.tsx.
+ */
+export default async function RscTracksPage() {
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
+
+  return (
+    <PageContainer grid>
+      <TrackGrid tracks={data.tracksForHome} pattern="rsc" onOpenTrack={incrementTrackViews} />
+    </PageContainer>
+  );
+}
+```
+
+Passing `errorPolicy: "none"` is the default, but stating it narrows `data` from `TData | undefined` to `TData` in the types.
+
+Because there is no browser cache to update, the mutation runs in a Server Action with the same RSC client. Every `"use server"` export is a public endpoint, so validate the input:
+
+```ts
+// src/lib/actions/increment-track-views.ts
+"use server";
+
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+import { getClient } from "@/lib/apollo/rsc-client";
+
+const TRACK_ID = /^[\w-]{1,64}$/;
+
+/**
+ * Server Action version of the mutation: the browser posts to Next.js, and the
+ * GraphQL request is made server-side with the RSC client. Use this when the
+ * page itself was rendered in RSC, because there is no browser cache to update.
+ */
+export async function incrementTrackViews(trackId: string) {
+  // Every "use server" export is a public endpoint: validate before forwarding.
+  if (typeof trackId !== "string" || !TRACK_ID.test(trackId)) {
+    throw new Error("Invalid track id");
+  }
+  const { data } = await getClient().mutate({
+    mutation: IncrementTrackViewsDocument,
+    variables: { trackId },
+  });
+  return data?.incrementTrackViews ?? null;
+}
+```
+
+The detail page shows the payoff of one client per request. `generateMetadata` and the page both run `GetTrack`, and only one request leaves the server, because the second call is served from that client's cache.
+
+```tsx
+// src/app/rsc/track/[trackId]/page.tsx
+import type { Metadata } from "next";
+import { GetTrackDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackDetail } from "@/components/track-detail";
+import { query } from "@/lib/apollo/rsc-client";
+
+type Props = PageProps<"/rsc/track/[trackId]">;
+
+const getTrack = (trackId: string) =>
+  query({ query: GetTrackDocument, variables: { trackId }, errorPolicy: "none" });
+
+/**
+ * generateMetadata and the page both run GetTrack. Because registerApolloClient shares
+ * one client per request, the second call is served from that client's cache:
+ * one network request, not two. Only RSC data can drive metadata like this.
+ */
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { trackId } = await params;
+  const { data } = await getTrack(trackId);
+  return { title: data.track.title };
+}
+
+export default async function RscTrackPage({ params }: Props) {
+  const { trackId } = await params;
+  const { data } = await getTrack(trackId);
+
+  return (
+    <PageContainer>
+      <TrackDetail track={data.track} />
+    </PageContainer>
+  );
+}
+```
+
+`params` is a Promise in Next 16; `PageProps<"/rsc/track/[trackId]">` is a global helper generated by `next typegen`.
+
+**Check:**
+
+```sh
+pnpm dev
+curl -s http://localhost:3000/rsc | grep -c "Cat-stronomy"   # at least 1: the data is in the HTML
+```
+
+Open http://localhost:3000/rsc with the Network tab filtered to the GraphQL host: no request. Click a card. The detail page shows the view count, and the count went up (the Server Action ran).
+
+## Step 8: Pattern 2: `useSuspenseQuery` and streaming SSR
+
+The Client Component version. Add the mutation hook the client patterns share. The mutation response selects `track { id numberOfViews }`, so `InMemoryCache` updates the `Track:<id>` entity and every component reading it re-renders. No `refetchQueries`, no manual `update`.
+
+```ts
+// src/lib/hooks/use-increment-track-views.ts
+import { useMutation } from "@apollo/client/react";
+import { useCallback } from "react";
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+
+/**
+ * Client-side version of the mutation. The response selects `track { id numberOfViews }`,
+ * so InMemoryCache normalizes it into the existing `Track:<id>` entity and every
+ * component reading that track re-renders. No refetch, no manual cache write.
+ */
+export function useIncrementTrackViews() {
+  const [incrementTrackViews] = useMutation(IncrementTrackViewsDocument);
+  return useCallback(
+    (trackId: string) => incrementTrackViews({ variables: { trackId } }),
+    [incrementTrackViews],
+  );
+}
+```
+
+A route-level `loading.tsx` is the Suspense boundary. The shell streams first, the data follows.
+
+```tsx
+// src/app/loading.tsx
+import { Loading } from "@/components/loading";
+import { PageContainer } from "@/components/page-container";
+
+// Route-level Suspense boundary: the shell (header, footer) streams first, the page content follows.
+export default function RouteLoading() {
+  return (
+    <PageContainer>
+      <Loading />
+    </PageContainer>
+  );
+}
+```
+
+```tsx
+// src/app/suspense/page.tsx
+"use client";
+
+import { useSuspenseQuery } from "@apollo/client/react";
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackGrid } from "@/components/track-grid";
+import { useIncrementTrackViews } from "@/lib/hooks/use-increment-track-views";
+
+/**
+ * Pattern 2: Client Component with useSuspenseQuery.
+ * Rendered twice: during streaming SSR (the request runs on the server and the result is
+ * streamed into the HTML alongside the markup) and in the browser, where the transported
+ * result hydrates the cache so no second request is made. The route-level loading.tsx is
+ * the Suspense boundary. Errors throw to error.tsx.
+ */
+export default function SuspenseTracksPage() {
+  const { data } = useSuspenseQuery(GetTracksDocument);
+  const incrementTrackViews = useIncrementTrackViews();
+
+  return (
+    <PageContainer grid>
+      <TrackGrid tracks={data.tracksForHome} pattern="suspense" onOpenTrack={incrementTrackViews} />
+    </PageContainer>
+  );
+}
+```
+
+Client pages get `params` as a Promise too. Unwrap it with React's `use()`:
+
+```tsx
+// src/app/suspense/track/[trackId]/page.tsx
+"use client";
+
+import { useSuspenseQuery } from "@apollo/client/react";
+import { use } from "react";
+import { GetTrackDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackDetail } from "@/components/track-detail";
+
+/**
+ * Client pages receive `params` as a Promise too; unwrap it with React's `use()`.
+ * If the card on the list page was clicked, the mutation response already updated
+ * `Track:<id>.numberOfViews` in the cache, and cache-first serves it here.
+ */
+export default function SuspenseTrackPage({ params }: PageProps<"/suspense/track/[trackId]">) {
+  const { trackId } = use(params);
+  const { data } = useSuspenseQuery(GetTrackDocument, { variables: { trackId } });
+
+  return (
+    <PageContainer>
+      <TrackDetail track={data.track} />
+    </PageContainer>
+  );
+}
+```
+
+**Check:** `curl -s http://localhost:3000/suspense | grep -c "Cat-stronomy"` finds the data: the request ran on the server during SSR. In the browser, the Network tab shows no GraphQL request after load: the transported result hydrated the cache. Click a card, then use the browser back button. The list renders instantly from the cache, and the card you clicked already carries the new view count on the detail page.
+
+## Step 9: Pattern 3: `PreloadQuery`
+
+Use this when the data belongs to a Client Component (it must stay live, or it drives interaction) but you want the request to start as early as possible: in the Server Component, before any client code runs, with no waterfall and no duplicate fetch.
+
+Form one: start the query in RSC, read it with `useSuspenseQuery` using the same document and variables.
+
+```tsx
+// src/app/preload/page.tsx
+import { Suspense } from "react";
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { Loading } from "@/components/loading";
+import { PageContainer } from "@/components/page-container";
+import { PreloadQuery } from "@/lib/apollo/rsc-client";
+import { TracksClient } from "./tracks-client";
+
+/**
+ * Pattern 3a: PreloadQuery + useSuspenseQuery.
+ * The Server Component starts the GraphQL request immediately. PreloadQuery streams the
+ * result into the Client Component cache as a "simulated network request", so the
+ * useSuspenseQuery in TracksClient waits for it instead of fetching again.
+ * Data fetched this way is client data: never read it from a Server Component.
+ */
+export default function PreloadTracksPage() {
+  return (
+    <PageContainer grid>
+      <PreloadQuery query={GetTracksDocument}>
+        <Suspense fallback={<Loading />}>
+          <TracksClient />
+        </Suspense>
+      </PreloadQuery>
+    </PageContainer>
+  );
+}
+```
+
+```tsx
+// src/app/preload/tracks-client.tsx
+"use client";
+
+import { useSuspenseQuery } from "@apollo/client/react";
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { TrackGrid } from "@/components/track-grid";
+import { useIncrementTrackViews } from "@/lib/hooks/use-increment-track-views";
+
+/** Same query and variables as the PreloadQuery above, so the preloaded result is picked up. */
+export function TracksClient() {
+  const { data } = useSuspenseQuery(GetTracksDocument);
+  const incrementTrackViews = useIncrementTrackViews();
+
+  return (
+    <TrackGrid tracks={data.tracksForHome} pattern="preload" onOpenTrack={incrementTrackViews} />
+  );
+}
+```
+
+Form two: the render prop hands a `queryRef` to the child, which reads it with `useReadQuery` and gets `refetch` from `useQueryRefHandlers`. Call `useQueryRefHandlers` before `useReadQuery`.
+
+```tsx
+// src/app/preload/track/[trackId]/page.tsx
+import { Suspense } from "react";
+import { GetTrackDocument } from "@/__generated__/graphql";
+import { Loading } from "@/components/loading";
+import { PageContainer } from "@/components/page-container";
+import { PreloadQuery } from "@/lib/apollo/rsc-client";
+import { TrackClient } from "./track-client";
+
+/**
+ * Pattern 3b: PreloadQuery render prop + useReadQuery.
+ * Instead of repeating the query in the Client Component, the queryRef is passed down.
+ * The child reads it with useReadQuery and gets refetch/fetchMore from useQueryRefHandlers.
+ */
+export default async function PreloadTrackPage({ params }: PageProps<"/preload/track/[trackId]">) {
+  const { trackId } = await params;
+
+  return (
+    <PageContainer>
+      <PreloadQuery query={GetTrackDocument} variables={{ trackId }}>
+        {(queryRef) => (
+          <Suspense fallback={<Loading />}>
+            <TrackClient queryRef={queryRef} />
+          </Suspense>
+        )}
+      </PreloadQuery>
+    </PageContainer>
+  );
+}
+```
+
+```tsx
+// src/app/preload/track/[trackId]/track-client.tsx
+"use client";
+
+import type { TransportedQueryRef } from "@apollo/client-integration-nextjs";
+import { useQueryRefHandlers, useReadQuery } from "@apollo/client/react";
+import { useTransition } from "react";
+import type { GetTrackQuery, GetTrackQueryVariables } from "@/__generated__/graphql";
+import { Button } from "@/components/button";
+import { TrackDetail } from "@/components/track-detail";
+import styles from "./track-client.module.css";
+
+interface TrackClientProps {
+  queryRef: TransportedQueryRef<GetTrackQuery, GetTrackQueryVariables>;
+}
+
+export function TrackClient({ queryRef }: TrackClientProps) {
+  // Order matters: useQueryRefHandlers before useReadQuery.
+  const { refetch } = useQueryRefHandlers(queryRef);
+  const { data } = useReadQuery(queryRef);
+  const [isPending, startTransition] = useTransition();
+
+  return (
+    <>
+      <div className={styles.toolbar}>
+        <Button disabled={isPending} onClick={() => startTransition(() => void refetch())}>
+          {isPending ? "Refreshing..." : "Refresh view count"}
+        </Button>
+      </div>
+      <TrackDetail track={data.track} />
+    </>
+  );
+}
+```
+
+Data that arrives this way is client data. Never read it from a Server Component; the integration creates a separate client for `PreloadQuery` to make that hard to do by accident.
+
+**Check:** open http://localhost:3000/preload/track/c_0. Note the view count. Increment it from outside the app:
+
+```sh
+curl -s -X POST https://odyssey-lift-off-server.herokuapp.com/ \
+  -H 'content-type: application/json' \
+  -d '{"query":"mutation { incrementTrackViews(id: \"c_0\") { success } }"}'
+```
+
+Click **Refresh view count**. The number goes up without a full reload. You will also see a console warning about a duplicate fragment name on these pages; it is a cosmetic upstream quirk, explained in [docs/patterns.md](docs/patterns.md#known-quirks).
+
+## Step 10: Pattern 4: `useBackgroundQuery`
+
+The client-only version of preloading: the parent starts the request without suspending and passes a `queryRef` to a child that suspends on it. Use it when a parent must render before its data-bound children, or to start several queries in parallel.
+
+```tsx
+// src/app/background/page.tsx
+"use client";
+
+import { type QueryRef, useBackgroundQuery, useReadQuery } from "@apollo/client/react";
+import { Suspense } from "react";
+import { type GetTracksQuery, GetTracksDocument } from "@/__generated__/graphql";
+import { Loading } from "@/components/loading";
+import { PageContainer } from "@/components/page-container";
+import { TrackGrid } from "@/components/track-grid";
+import { useIncrementTrackViews } from "@/lib/hooks/use-increment-track-views";
+
+/**
+ * Pattern 4: useBackgroundQuery + useReadQuery, entirely in Client Components.
+ * The parent kicks off the request without suspending, then the child suspends on the
+ * queryRef. This avoids waterfalls when a parent needs to render before its data-bound
+ * children. PreloadQuery is the RSC equivalent of this pattern.
+ */
+export default function BackgroundTracksPage() {
+  const [queryRef] = useBackgroundQuery(GetTracksDocument);
+
+  return (
+    <PageContainer grid>
+      <Suspense fallback={<Loading />}>
+        <TracksReader queryRef={queryRef} />
+      </Suspense>
+    </PageContainer>
+  );
+}
+
+function TracksReader({ queryRef }: { queryRef: QueryRef<GetTracksQuery> }) {
+  const { data } = useReadQuery(queryRef);
+  const incrementTrackViews = useIncrementTrackViews();
+
+  return (
+    <TrackGrid tracks={data.tracksForHome} pattern="background" onOpenTrack={incrementTrackViews} />
+  );
+}
+```
+
+```tsx
+// src/app/background/track/[trackId]/page.tsx
+"use client";
+
+import { type QueryRef, useBackgroundQuery, useReadQuery } from "@apollo/client/react";
+import { Suspense, use } from "react";
+import { type GetTrackQuery, GetTrackDocument } from "@/__generated__/graphql";
+import { Loading } from "@/components/loading";
+import { PageContainer } from "@/components/page-container";
+import { TrackDetail } from "@/components/track-detail";
+
+export default function BackgroundTrackPage({ params }: PageProps<"/background/track/[trackId]">) {
+  const { trackId } = use(params);
+  const [queryRef] = useBackgroundQuery(GetTrackDocument, { variables: { trackId } });
+
+  return (
+    <PageContainer>
+      <Suspense fallback={<Loading />}>
+        <TrackReader queryRef={queryRef} />
+      </Suspense>
+    </PageContainer>
+  );
+}
+
+function TrackReader({ queryRef }: { queryRef: QueryRef<GetTrackQuery> }) {
+  const { data } = useReadQuery(queryRef);
+  return <TrackDetail track={data.track} />;
+}
+```
+
+**Check:** http://localhost:3000/background behaves like Step 8: data in the SSR HTML, no browser GraphQL request after load.
+
+## Step 11: Pattern 5: `useQuery`, the course way
+
+`useQuery` never suspends. The SSR pass renders the loading state, and the request only happens in the browser after hydration. It is still right for polling, lazy queries, and anything that must not block rendering. The course's `QueryResult` helper comes back with a render prop, so `data` is narrowed by the time your children run:
+
+```tsx
+// src/components/query-result.tsx
+import type { ErrorLike } from "@apollo/client";
+import type { ReactNode } from "react";
+import { Loading } from "./loading";
+
+interface QueryResultProps<TData> {
+  loading: boolean;
+  error?: ErrorLike;
+  data: TData | undefined;
+  /** Rendered once data is available, with `data` narrowed to a defined value. */
+  children: (data: TData) => ReactNode;
+}
+
+/**
+ * Renders the three states of a non-suspense hook (useQuery): loading, error, or children.
+ * Suspense hooks do not need this; Suspense and error boundaries take over.
+ */
+export function QueryResult<TData>({ loading, error, data, children }: QueryResultProps<TData>) {
+  if (error) {
+    return <p>ERROR: {error.message}</p>;
+  }
+  if (loading) {
+    return <Loading />;
+  }
+  if (data === undefined) {
+    return <p>Nothing to show...</p>;
+  }
+  return <>{children(data)}</>;
+}
+```
+
+```tsx
+// src/app/legacy/page.tsx
+"use client";
+
+import { useQuery } from "@apollo/client/react";
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { QueryResult } from "@/components/query-result";
+import { TrackGrid } from "@/components/track-grid";
+import { useIncrementTrackViews } from "@/lib/hooks/use-increment-track-views";
+
+/**
+ * Pattern 5: useQuery, the way the Odyssey course teaches it.
+ * useQuery never suspends, so the SSR pass renders the loading state and the request is
+ * only made in the browser after hydration. Loading and error are handled by hand.
+ * Still the right tool for polling, lazy queries, or when you must not block rendering.
+ */
+export default function LegacyTracksPage() {
+  const { loading, error, data } = useQuery(GetTracksDocument);
+  const incrementTrackViews = useIncrementTrackViews();
+
+  return (
+    <PageContainer grid>
+      <QueryResult loading={loading} error={error} data={data}>
+        {({ tracksForHome }) => (
+          <TrackGrid tracks={tracksForHome} pattern="legacy" onOpenTrack={incrementTrackViews} />
+        )}
+      </QueryResult>
+    </PageContainer>
+  );
+}
+```
+
+```tsx
+// src/app/legacy/track/[trackId]/page.tsx
+"use client";
+
+import { useQuery } from "@apollo/client/react";
+import { use } from "react";
+import { GetTrackDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { QueryResult } from "@/components/query-result";
+import { TrackDetail } from "@/components/track-detail";
+
+export default function LegacyTrackPage({ params }: PageProps<"/legacy/track/[trackId]">) {
+  const { trackId } = use(params);
+  const { loading, error, data } = useQuery(GetTrackDocument, { variables: { trackId } });
+
+  return (
+    <PageContainer>
+      <QueryResult loading={loading} error={error} data={data}>
+        {({ track }) => <TrackDetail track={track} />}
+      </QueryResult>
+    </PageContainer>
+  );
+}
+```
+
+**Check:** `curl -s http://localhost:3000/legacy | grep -c "Cat-stronomy"` prints `0`, and `curl -s http://localhost:3000/legacy | grep -c progressbar` prints `1`: the HTML has the spinner, not the data. In the browser, the Network tab shows a GraphQL request after hydration.
+
+## Step 12: Errors and retry
+
+Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
+
+There is a trap. Apollo's suspense hooks keep a rejected result in their cache until it auto-disposes, 30 seconds by default, so `retry()` alone re-throws the same error. Refetch what is still watched first:
+
+```tsx
+// src/app/error.tsx
+"use client";
+
+import { useApolloClient } from "@apollo/client/react";
+import { useTransition } from "react";
+import { Button } from "@/components/button";
+import { PageContainer } from "@/components/page-container";
+import styles from "./error.module.css";
+
+/**
+ * Nearest error boundary for every route. Suspense hooks (useSuspenseQuery, useReadQuery)
+ * and awaited RSC queries throw here; useQuery does not, it returns `error` instead.
+ *
+ * In production, Next.js redacts errors thrown during Server Component rendering
+ * (React error #441) and only forwards a digest, so the GraphQL message is visible in
+ * development and in Client Component patterns, but not for the RSC pattern.
+ */
+export default function RouteError({
+  error,
+  retry,
+}: {
+  error: Error & { digest?: string };
+  retry: () => void;
+}) {
+  const client = useApolloClient();
+  const [isPending, startTransition] = useTransition();
+
+  const handleRetry = () =>
+    startTransition(async () => {
+      // Suspense hooks keep a rejected result in their cache until it auto-disposes
+      // (30 s by default), so retry() alone would re-throw the same error. Refetch the
+      // queries that are still watched first; a repeated failure surfaces through retry().
+      await client.refetchQueries({ include: "active" }).catch(() => undefined);
+      // retry() re-fetches the route segment and re-renders it; reset() would only re-render.
+      retry();
+    });
+
+  return (
+    <PageContainer>
+      <section className={styles.error}>
+        <h2>Houston, something went wrong</h2>
+        <pre className={styles.message}>{error.message}</pre>
+        {error.digest ? <p className={styles.digest}>Digest: {error.digest}</p> : null}
+        <Button onClick={handleRetry} disabled={isPending}>
+          {isPending ? "Retrying..." : "Try again"}
+        </Button>
+      </section>
+    </PageContainer>
+  );
+}
+```
+
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 13 adds a test that proves recovery from a transient failure.
+
+## Step 13: Tests
+
+Unit tests with Vitest, Testing Library, and happy-dom:
+
+```ts
+// vitest.config.mts
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: { tsconfigPaths: true },
+  test: {
+    environment: "happy-dom",
+    setupFiles: ["./vitest.setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+  },
+});
+```
+
+```ts
+// vitest.setup.ts
+import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+afterEach(cleanup);
+```
+
+The most useful unit test asserts what the whole "no refetch, no manual update" argument rests on: after the mutation, the normalized entity in the cache changed. `MockedProvider` moved to `@apollo/client/testing/react` in Apollo Client 4.
+
+```tsx
+// src/lib/hooks/use-increment-track-views.test.tsx
+import { InMemoryCache, gql } from "@apollo/client";
+import { MockedProvider } from "@apollo/client/testing/react";
+import { act, renderHook } from "@testing-library/react";
+import type { PropsWithChildren } from "react";
+import { describe, expect, it } from "vitest";
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+import { useIncrementTrackViews } from "./use-increment-track-views";
+
+const TRACK_VIEWS = gql`
+  fragment TrackViews on Track {
+    id
+    numberOfViews
+  }
+`;
+
+const mocks = [
+  {
+    request: { query: IncrementTrackViewsDocument, variables: { trackId: "c_0" } },
+    result: {
+      data: {
+        incrementTrackViews: {
+          __typename: "IncrementTrackViewsResponse" as const,
+          code: 200,
+          success: true,
+          message: "Incremented",
+          track: { __typename: "Track" as const, id: "c_0", numberOfViews: 52 },
+        },
+      },
+    },
+  },
+];
+
+describe("useIncrementTrackViews", () => {
+  it("runs the mutation and updates the normalized Track entity in the cache", async () => {
+    const cache = new InMemoryCache();
+    cache.writeFragment({
+      id: "Track:c_0",
+      fragment: TRACK_VIEWS,
+      data: { __typename: "Track", id: "c_0", numberOfViews: 51 },
+    });
+
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <MockedProvider mocks={mocks} cache={cache}>
+        {children}
+      </MockedProvider>
+    );
+    const { result } = renderHook(() => useIncrementTrackViews(), { wrapper });
+
+    const response = await act(() => result.current("c_0"));
+
+    expect(response.data?.incrementTrackViews.success).toBe(true);
+    expect(cache.extract()["Track:c_0"]).toMatchObject({ numberOfViews: 52 });
+  });
+});
+```
+
+The other unit tests (`src/components/*.test.tsx`, `src/lib/helpers.test.ts`) cover the presentational components and the card's click semantics. Async Server Components cannot be unit-tested with Vitest, so the pattern differences are proven end to end with Playwright against a production build:
+
+```ts
+// playwright.config.ts
+import { loadEnvConfig } from "@next/env";
+import { defineConfig, devices } from "@playwright/test";
+
+// Same .env resolution as Next.js, so the tests target the endpoint the app talks to.
+loadEnvConfig(process.cwd());
+
+const PORT = 3000;
+
+export default defineConfig({
+  testDir: "./e2e",
+  fullyParallel: true,
+  forbidOnly: Boolean(process.env.CI),
+  retries: process.env.CI ? 2 : 0,
+  reporter: "list",
+  use: {
+    baseURL: `http://localhost:${PORT}`,
+    trace: "on-first-retry",
+  },
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  webServer: {
+    command: `pnpm build && pnpm start -p ${PORT}`,
+    url: `http://localhost:${PORT}`,
+    reuseExistingServer: !process.env.CI,
+    timeout: 180_000,
+  },
+});
+```
+
+The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders and navigates; that server-rendered routes contain the data in their HTML while `/legacy` contains the spinner; that `/suspense` makes zero browser GraphQL requests while `/legacy` makes one; that the Server Action POST happens and the counter moves; and that the `queryRef` refetch picks up a server-side change. `e2e/error-recovery.spec.ts` blocks GraphQL during a client-side navigation, lifts the block, and expects **Try again** to recover.
+
+**Check:**
+
+```sh
+pnpm vitest run       # 6 files, 20 tests
+pnpm test:e2e         # builds, starts the server, 10 tests
+```
+
+## Step 14: Build and ship
+
+```sh
+pnpm build
+pnpm start
+```
+
+Every route shows as `ƒ (Dynamic)`. Two settings make that true. The RSC link's `cache: "no-store"` marks the RSC routes dynamic on its own. The Client Component patterns fetch during SSR through the browser-side link, which Next.js cannot see, so the root layout also exports `dynamic = "force-dynamic"`; without it those routes would be prerendered at build time with a stale transported cache.
+
+The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
+
+**Check:** `curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/rsc` prints `200` and the view counts on `/rsc` match the ones on `/suspense`.
+
+## What you learned
+
+- Two Apollo Clients: a per-request one for Server Components and Server Actions (`registerApolloClient`), and a provider-based one for Client Components that runs on the server for SSR and again in the browser (`ApolloNextAppProvider`). Never read the same data from both.
+- `"use client"` is an import-graph boundary. Server-rendered `children` pass through Client Components untouched, which is why one provider in the root layout costs the RSC pattern nothing.
+- Suspense hooks turn streaming SSR on. `useQuery` ships a spinner; `useSuspenseQuery` ships the data and a warm cache.
+- `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
+- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
+- `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
+
+Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, then try `cacheComponents: true` (delete the layout's `force-dynamic` first), Apollo's data masking with `useFragment`, and `@defer` with `SSRMultipartLink`.

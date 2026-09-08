@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "Catstronauts",
+  "name": "Catstronauts: Apollo Client on the Next.js App Router",
   "icons": [
     {
       "src": "favicon.ico",
