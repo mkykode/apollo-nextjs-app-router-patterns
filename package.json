@@ -1,65 +1,49 @@
 {
   "name": "odyssey-client-side-graphql",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "demo app for Odyssey's Client-Side GraphQL with React and Apollo course",
-  "dependencies": {
-    "@apollo/client": "^3.14.1",
-    "@apollo/space-kit": "^9.3.1",
-    "@emotion/cache": "^11.4.0",
-    "@emotion/core": "^10.1.1",
-    "@emotion/react": "^11.4.0",
-    "@emotion/styled": "^11.3.0",
-    "graphql": "^17.0.2",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-markdown": "^9.0.1",
-    "react-player": "^2.14.1",
-    "react-router-dom": "^6.22.0"
-  },
+  "description": "Catstronauts on Next.js 16 App Router: every Apollo Client 4 data-fetching pattern side by side",
+  "packageManager": "pnpm@11.22.0",
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest",
-    "start": "vite",
-    "build": "vite build",
-    "generate": "graphql-codegen"
+    "generate": "graphql-codegen --config codegen.ts"
   },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+  "dependencies": {
+    "@apollo/client": "^4.2.12",
+    "@apollo/client-integration-nextjs": "^0.14.5",
+    "@graphql-typed-document-node/core": "^3.2.0",
+    "graphql": "^17.0.2",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "react-player": "^3.4.0",
+    "rxjs": "^7.8.2",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@graphql-codegen/cli": "^7.4.0",
-    "@graphql-codegen/client-preset": "^6.1.3",
+    "@graphql-codegen/typed-document-node": "^7.1.0",
     "@graphql-codegen/typescript": "^6.1.0",
-    "@graphql-typed-document-node/core": "^3.2.0",
-    "@testing-library/jest-dom": "^4.2.4",
-    "@testing-library/react": "^9.3.2",
-    "@testing-library/user-event": "^7.1.2",
-    "@types/jest": "^29.2.6",
-    "@types/node": "^18.11.18",
-    "@types/react": "^18.0.27",
-    "@types/react-dom": "^18.0.10",
-    "@types/react-router-dom": "^5.3.3",
-    "@vitejs/plugin-react": "^4.0.0",
-    "@vitest/ui": "^0.32.2",
-    "happy-dom": "^9.20.3",
-    "jest": "^27.5.1",
-    "typescript": "^5.1.3",
-    "vite": "^4.3.9",
-    "vitest": "^0.32.2"
+    "@graphql-codegen/typescript-operations": "^6.1.6",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "happy-dom": "^20.14.0",
+    "typescript": "^5",
+    "vitest": "^5.0.0"
   },
-  "overrides": {
-    "nth-check": "2.0.1"
-  },
-  "main": "src/index.js",
   "author": "Raphael Terrier @R4ph-t",
   "license": "MIT"
 }

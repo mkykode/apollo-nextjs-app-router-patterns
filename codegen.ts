@@ -1,18 +1,27 @@
-import { CodegenConfig } from "@graphql-codegen/cli";
+import type { CodegenConfig } from "@graphql-codegen/cli";
+import { GRAPHQL_URI } from "./src/lib/graphql-uri";
 
+/**
+ * Apollo's recommended codegen setup for Apollo Client 4:
+ * typescript + typescript-operations + typed-document-node.
+ * Operations live in .graphql files; fragments are colocated with the component that owns them.
+ */
 const config: CodegenConfig = {
-  schema: "https://odyssey-lift-off-server.herokuapp.com/",
-  documents: ["src/**/*.tsx"],
+  overwrite: true,
+  schema: GRAPHQL_URI,
+  documents: ["src/**/*.graphql"],
+  ignoreNoDocuments: true,
   generates: {
-    './src/__generated__/': {
-      preset: 'client',
-      presetConfig: { gqlTagName: 'gql' },
-    },
-    './src/__generated__/types.ts': {
-      plugins: ['typescript'],
+    "./src/__generated__/graphql.ts": {
+      plugins: ["typescript", "typescript-operations", "typed-document-node"],
+      config: {
+        avoidOptionals: { field: true, inputValue: false },
+        defaultScalarType: "unknown",
+        nonOptionalTypename: true,
+        skipTypeNameForRoot: true,
+      },
     },
   },
-  // ignoreNoDocuments: true,
 };
 
 export default config;

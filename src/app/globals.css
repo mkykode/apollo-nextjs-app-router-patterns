@@ -1,0 +1,125 @@
+/* Reset: the subset of normalize.css that space-kit shipped, plus its box-sizing rule. */
+html {
+  line-height: 1.15;
+  -webkit-text-size-adjust: 100%;
+  box-sizing: border-box;
+  height: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+main {
+  display: block;
+}
+
+pre,
+code {
+  font-family: var(--font-mono), monospace;
+  font-size: 1em;
+}
+
+a {
+  background-color: transparent;
+}
+
+b,
+strong {
+  font-weight: bolder;
+}
+
+img {
+  border-style: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: 100%;
+  line-height: 1.15;
+  margin: 0;
+  overflow: visible;
+  text-transform: none;
+  appearance: button;
+}
+
+/* Design tokens: the space-kit palette used by the original app. */
+:root {
+  --pink-darkest: #661f4e;
+  --pink-darker: #832363;
+  --pink-dark: #c43997;
+  --pink-base: #f25cc1;
+  --pink-light: #ffa3e0;
+  --pink-lighter: #ffd4f1;
+  --pink-lightest: #ffe6f7;
+
+  --silver-darker: #cad0d8;
+  --silver-dark: #dee2e7;
+  --silver-base: #ebeef0;
+  --silver-light: #f4f6f8;
+  --silver-lighter: #fcfdff;
+
+  --grey-darker: #424855;
+  --grey-dark: #5a6270;
+  --grey-base: #777f8e;
+  --grey-light: #959daa;
+  --grey-lighter: #b2b9c3;
+
+  --black-darker: #12151a;
+  --black-dark: #14171c;
+  --black-base: #191c23;
+  --black-light: #22262e;
+  --black-lighter: #2f353f;
+
+  --color-accent: var(--pink-base);
+  --color-background: var(--silver-light);
+  --color-text: var(--black-base);
+  --color-text-secondary: var(--grey-dark);
+
+  --width-regular-page: 1100px;
+  --width-text-page: 800px;
+  --unit: 8px;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-sans), sans-serif;
+  background-color: var(--color-background);
+  background-image: url("/space_kitty_pattern.png");
+  color: var(--color-text);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 40px;
+  line-height: 1;
+}
+
+h2 {
+  font-size: 36px;
+}
+
+h3 {
+  font-size: 30px;
+}
+
+h5 {
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 4px;
+}

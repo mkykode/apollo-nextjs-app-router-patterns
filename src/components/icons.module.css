@@ -1,0 +1,8 @@
+.icon {
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.icon * {
+  vector-effect: non-scaling-stroke;
+}

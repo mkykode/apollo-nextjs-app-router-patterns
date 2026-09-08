@@ -1,0 +1,70 @@
+.intro {
+  max-width: var(--width-text-page);
+  align-self: center;
+  text-align: center;
+  margin: 30px 0;
+}
+
+.intro p {
+  color: var(--color-text-secondary);
+  font-size: 1.1em;
+  line-height: 1.5;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 20px;
+  border-radius: 6px;
+  background-color: white;
+  box-shadow: 0px 1px 5px 0px rgba(0, 0, 0, 0.15);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.card:hover {
+  background-color: var(--pink-lightest);
+}
+
+.card p {
+  margin: 0;
+  flex: 1;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cardHeader h3 {
+  font-size: 1.4em;
+}
+
+.badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.8em;
+  background-color: var(--pink-lightest);
+  color: var(--pink-darker);
+}
+
+.route {
+  font-size: 0.9em;
+  color: var(--pink-base);
+}

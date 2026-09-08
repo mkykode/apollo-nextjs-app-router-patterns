@@ -1,0 +1,107 @@
+.card {
+  border-radius: 6px;
+  color: var(--color-text);
+  background-color: white;
+  box-shadow: 0px 1px 5px 0px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-decoration: none;
+  height: 380px;
+  margin: 10px;
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+}
+
+.card:hover {
+  background-color: var(--pink-lightest);
+}
+
+@media (min-width: 480px) {
+  .card {
+    width: 90%;
+  }
+}
+
+@media (min-width: 768px) {
+  .card {
+    width: 47%;
+  }
+}
+
+@media (min-width: 992px) {
+  .card {
+    width: 31%;
+  }
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  height: 100%;
+}
+
+.imageContainer {
+  height: 220px;
+  position: relative;
+}
+
+.imageContainer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(250, 0, 150, 0.2);
+}
+
+.image {
+  object-fit: cover;
+  filter: grayscale(60%);
+}
+
+.body {
+  padding: 18px;
+  flex: 1;
+  display: flex;
+  color: var(--color-text-secondary);
+  flex-direction: column;
+  justify-content: space-around;
+}
+
+.title {
+  text-align: center;
+  font-size: 1.4em;
+  line-height: 1em;
+  font-weight: 700;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.footer {
+  display: flex;
+  flex-direction: row;
+}
+
+.authorImage {
+  height: 30px;
+  width: 30px;
+  margin-right: 8px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.authorAndTrack {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.authorName {
+  line-height: 1em;
+  font-size: 1.1em;
+}
+
+.trackLength {
+  font-size: 0.8em;
+}

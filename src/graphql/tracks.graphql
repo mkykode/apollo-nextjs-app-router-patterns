@@ -1,0 +1,29 @@
+# Page-level operations. Each page has one query composed from colocated component fragments.
+
+query GetTracks {
+  tracksForHome {
+    id
+    ...TrackCard_track
+  }
+}
+
+query GetTrack($trackId: ID!) {
+  track(id: $trackId) {
+    id
+    ...TrackDetail_track
+  }
+}
+
+# The response selects `track { id numberOfViews }` so the normalized cache
+# updates the Track entity automatically: no manual cache write, no refetch.
+mutation IncrementTrackViews($trackId: ID!) {
+  incrementTrackViews(id: $trackId) {
+    code
+    success
+    message
+    track {
+      id
+      numberOfViews
+    }
+  }
+}

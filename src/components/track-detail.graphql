@@ -1,0 +1,20 @@
+# Colocated fragment: exactly the fields TrackDetail renders.
+fragment TrackDetail_track on Track {
+  id
+  title
+  description
+  thumbnail
+  length
+  modulesCount
+  numberOfViews
+  author {
+    id
+    name
+    photo
+  }
+  modules {
+    id
+    title
+    length
+  }
+}

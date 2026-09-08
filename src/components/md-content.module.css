@@ -1,0 +1,30 @@
+.markdown {
+  color: var(--grey-darker);
+}
+
+.markdown h1 {
+  font-size: 1.7em;
+}
+
+.markdown h2 {
+  font-size: 1.4em;
+}
+
+.markdown h3 {
+  font-size: 1.2em;
+}
+
+.markdown a {
+  color: var(--pink-base);
+}
+
+.markdown pre {
+  padding: 20px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-dark);
+  background-color: var(--silver-base);
+}
+
+.markdown pre code {
+  font-size: 0.9em;
+}

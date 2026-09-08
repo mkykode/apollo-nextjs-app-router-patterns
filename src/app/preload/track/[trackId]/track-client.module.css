@@ -1,0 +1,8 @@
+.toolbar {
+  display: flex;
+  justify-content: center;
+  max-width: var(--width-text-page);
+  width: 100%;
+  align-self: center;
+  margin-top: 10px;
+}

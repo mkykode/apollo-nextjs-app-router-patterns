@@ -1,3 +1,28 @@
-node_modules
+# dependencies
+/node_modules
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# misc
 .DS_Store
-.env
+*.pem
+
+# debug
+npm-debug.log*
+.pnpm-debug.log*
+
+# env files: commit only the example
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

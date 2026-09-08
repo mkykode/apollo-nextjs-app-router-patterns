@@ -1,0 +1,13 @@
+# Colocated fragment: exactly the fields TrackCard renders, nothing more.
+fragment TrackCard_track on Track {
+  id
+  title
+  thumbnail
+  length
+  modulesCount
+  author {
+    id
+    name
+    photo
+  }
+}

@@ -1,0 +1,9 @@
+.content {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  max-width: var(--width-text-page);
+  width: 100%;
+  align-self: center;
+  background-color: var(--color-background);
+}
