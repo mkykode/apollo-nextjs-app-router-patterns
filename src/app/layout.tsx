@@ -16,16 +16,15 @@ const sourceCode = Source_Code_Pro({
 });
 
 export const metadata: Metadata = {
+  // Absolute base for og:image and friends. Icons, the manifest, and the Open Graph image
+  // are file conventions next to this layout (favicon.ico, apple-icon.png, manifest.ts,
+  // opengraph-image.tsx), so nothing else needs listing here.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   title: {
     default: "Catstronauts",
     template: "%s | Catstronauts",
   },
   description: "Apollo Client 4 data-fetching patterns on the Next.js App Router",
-  manifest: "/manifest.json",
-  icons: {
-    icon: "/favicon.ico",
-    apple: "/logo192.png",
-  },
 };
 
 export const viewport: Viewport = {
