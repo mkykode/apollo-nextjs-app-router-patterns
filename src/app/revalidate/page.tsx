@@ -23,7 +23,7 @@ export default async function CachedTracksPage() {
     <PageContainer grid>
       <TrackGrid
         tracks={data.tracksForHome}
-        pattern="cached"
+        pattern="revalidate"
         onOpenTrack={incrementTrackViewsAndUpdateCache}
       />
     </PageContainer>

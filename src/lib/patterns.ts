@@ -6,7 +6,7 @@ export type PatternSlug =
   | "preload"
   | "background"
   | "legacy"
-  | "cached";
+  | "revalidate";
 
 export interface Pattern {
   slug: PatternSlug;
@@ -64,8 +64,8 @@ export const PATTERNS: readonly Pattern[] = [
       "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
   },
   {
-    slug: "cached",
-    title: "RSC + Data Cache",
+    slug: "revalidate",
+    title: "RSC + revalidate",
     fetchedBy: "Server Component",
     shipsDataInHtml: true,
     summary:

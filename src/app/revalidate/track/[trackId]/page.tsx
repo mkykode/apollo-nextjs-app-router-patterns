@@ -5,7 +5,7 @@ import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
 import { trackTag } from "@/lib/cache-tags";
 
-type Props = PageProps<"/cached/track/[trackId]">;
+type Props = PageProps<"/revalidate/track/[trackId]">;
 
 /** One tag per track, so a Server Action can expire exactly this page. */
 const getTrack = (trackId: string) =>
