@@ -1,8 +1,8 @@
 import { Loading } from "@/components/loading";
 import { PageContainer } from "@/components/page-container";
 
-// Route-level Suspense boundary: the shell (header, footer) streams first, the page content follows.
-export default function RouteLoading() {
+/** The detail page reads `params`, which Cache Components require to sit under a Suspense boundary. */
+export default function UseCacheLoading() {
   return (
     <PageContainer>
       <Loading />

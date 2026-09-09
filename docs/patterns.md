@@ -124,4 +124,4 @@ What the model removed compared with the `dynamic` branch: the route segment con
 ## Known quirks
 
 - **`Warning: fragment with name TrackDetail_track already exists`** in the console on `/preload` pages. `@apollo/client-react-streaming` revives a transported query with `gql(print(gql(options.query)))`; graphql-tag registers the fragment once from the compact string and once from the pretty-printed one and warns. Cosmetic, upstream, only for documents with fragments. It shows in the server log and in the browser console.
-- Unknown track ids: the Odyssey server answers HTTP 404, which Apollo surfaces as `ServerError` and the error boundary displays.
+- Unknown track ids: the Odyssey API is Apollo Server over a REST service, so an unknown id is an HTTP 200 carrying a GraphQL error whose `extensions.response.status` is 404. `src/lib/apollo/not-found.ts` maps that to `notFound()`.

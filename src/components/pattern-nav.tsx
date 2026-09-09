@@ -44,11 +44,18 @@ export function PatternNavLinks({ pathname }: { pathname: string }) {
   // every navigation would paint one frame without it (or at the old position) and blink.
   useLayoutEffect(measure, [measure]);
 
-  // useEffect: subscribe to something outside React (the viewport) and clean up. Nothing
-  // here has to happen before paint, so the cheaper effect is the right one.
+  // useEffect: subscribe to things outside React and clean up. The viewport can resize, and
+  // the web font can finish loading after the first measurement, which changes the link's
+  // width. Nothing here has to happen before paint, so the cheaper effect is the right one.
   useEffect(() => {
+    // Test DOMs (happy-dom) have no Font Loading API; browsers do.
+    const fonts = "fonts" in document ? document.fonts : undefined;
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      fonts?.removeEventListener("loadingdone", measure);
+    };
   }, [measure]);
 
   const measured = indicator?.pathname === pathname;
