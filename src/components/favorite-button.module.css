@@ -1,0 +1,27 @@
+.button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.9);
+  color: var(--pink-base);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.button:hover,
+.button[aria-pressed="true"] {
+  background-color: var(--pink-base);
+  color: white;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--pink-dark);
+  outline-offset: 2px;
+}

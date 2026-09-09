@@ -59,7 +59,7 @@ describe("TrackCard", () => {
     expect(fireEvent.click(link)).toBe(false);
 
     expect(onOpen).toHaveBeenCalledOnce();
-    await waitFor(() => expect(link).toHaveAttribute("aria-busy", "true"));
+    await waitFor(() => expect(link.closest("article")).toHaveAttribute("aria-busy", "true"));
     expect(push).not.toHaveBeenCalled();
 
     increment.resolve();
@@ -74,7 +74,7 @@ describe("TrackCard", () => {
     const link = screen.getByRole("link");
 
     fireEvent.click(link);
-    await waitFor(() => expect(link).toHaveAttribute("aria-busy", "true"));
+    await waitFor(() => expect(link.closest("article")).toHaveAttribute("aria-busy", "true"));
     expect(fireEvent.click(link)).toBe(false);
 
     increment.resolve();

@@ -1,12 +1,9 @@
 import "server-only";
 import "./dev-messages";
-import { HttpLink } from "@apollo/client";
-import {
-  ApolloClient,
-  InMemoryCache,
-  registerApolloClient,
-} from "@apollo/client-integration-nextjs";
+import { ApolloClient, registerApolloClient } from "@apollo/client-integration-nextjs";
 import { GRAPHQL_URI } from "@/lib/graphql-uri";
+import { createCache } from "./cache";
+import { createLinkChain } from "./links";
 
 /**
  * Apollo Client for React Server Components and Server Actions.
@@ -28,7 +25,10 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
 export const { getClient, query, PreloadQuery } = registerApolloClient(
   () =>
     new ApolloClient({
-      cache: new InMemoryCache(),
-      link: new HttpLink({ uri: GRAPHQL_URI }),
+      cache: createCache(),
+      // The same chain as the browser client (src/lib/apollo/links.ts), with a header that
+      // marks server-side requests in the API's logs. A session token would be resolved here
+      // per request, for example from cookies(), and attached by the SetContextLink.
+      link: createLinkChain({ uri: GRAPHQL_URI, headers: { "x-apollo-origin": "rsc" } }),
     }),
 );

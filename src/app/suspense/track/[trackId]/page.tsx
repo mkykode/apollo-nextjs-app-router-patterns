@@ -5,6 +5,7 @@ import { use } from "react";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { RegisterViewClientForm } from "@/components/register-view-client-form";
+import { FavoriteStatus } from "@/components/favorite-status";
 import { TrackDetail } from "@/components/track-detail";
 import { TrackPreview } from "@/components/track-preview";
 
@@ -21,6 +22,7 @@ export default function SuspenseTrackPage({ params }: PageProps<"/suspense/track
     <PageContainer>
       <TrackDetail track={data.track} />
       <RegisterViewClientForm trackId={trackId} />
+      <FavoriteStatus trackId={trackId} />
       <TrackPreview currentTrackId={trackId} />
     </PageContainer>
   );

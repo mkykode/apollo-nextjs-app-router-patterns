@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import logo from "@/assets/space_cat_logo.png";
+import { FavoritesCount } from "./favorites-count";
 import { PatternNav } from "./pattern-nav";
 import styles from "./header.module.css";
 
@@ -28,6 +29,7 @@ export function Header() {
           </Link>
         </div>
         <PatternNav />
+        <FavoritesCount />
       </div>
     </header>
   );
