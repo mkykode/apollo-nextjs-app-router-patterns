@@ -1,34 +1,23 @@
 import type { Metadata } from "next";
-import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
-import { query } from "@/lib/apollo/rsc-client";
-import { trackTag } from "@/lib/cache-tags";
+import { getCachedTrack } from "@/lib/data/tracks";
 
 type Props = PageProps<"/cached/track/[trackId]">;
 
-/** One tag per track, so a Server Action can expire exactly this page. */
-const getTrack = (trackId: string) =>
-  query({
-    query: GetTrackDocument,
-    variables: { trackId },
-    errorPolicy: "none",
-    context: { fetchOptions: { next: { revalidate: 60, tags: [trackTag(trackId)] } } },
-  });
-
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;
-  const { data } = await getTrack(trackId);
-  return { title: data.track.title };
+  const track = await getCachedTrack(trackId);
+  return { title: track.title };
 }
 
 export default async function CachedTrackPage({ params }: Props) {
   const { trackId } = await params;
-  const { data } = await getTrack(trackId);
+  const track = await getCachedTrack(trackId);
 
   return (
     <PageContainer>
-      <TrackDetail track={data.track} />
+      <TrackDetail track={track} />
     </PageContainer>
   );
 }

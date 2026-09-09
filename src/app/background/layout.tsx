@@ -1,11 +1,13 @@
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 
 /**
- * This pattern fetches at request time. Without this segment config Next.js would fetch once
- * during `next build` and prerender the route with that data (the default `auto no cache`).
+ * The SSR pass of these Client Components fetches through the browser-side Apollo link, which
+ * Cache Components cannot see, so the route would be prerendered at build with stale data.
+ * connection() defers everything below it to request time; the root loading.tsx is the
+ * Suspense boundary that keeps the shell prerenderable.
  */
-export const dynamic = "force-dynamic";
-
-export default function BackgroundLayout({ children }: { children: ReactNode }) {
+export default async function BackgroundLayout({ children }: { children: ReactNode }) {
+  await connection();
   return children;
 }

@@ -9,9 +9,15 @@ import styles from "./pattern-nav.module.css";
 /**
  * Switch data-fetching pattern while staying on the same page:
  * /rsc/track/c_0 -> /preload/track/c_0. Client Component because it reads the pathname.
+ *
+ * Under Cache Components the pathname is runtime data, so the header renders this inside a
+ * Suspense boundary with PatternNavLinks (no active state) as the prerendered fallback.
  */
 export function PatternNav() {
-  const pathname = usePathname();
+  return <PatternNavLinks pathname={usePathname()} />;
+}
+
+export function PatternNavLinks({ pathname }: { pathname: string }) {
   const active = PATTERNS.find(
     ({ slug }) => pathname === `/${slug}` || pathname.startsWith(`/${slug}/`),
   );

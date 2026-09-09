@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { Loading } from "@/components/loading";
@@ -12,7 +13,11 @@ import { TracksClient } from "./tracks-client";
  * useSuspenseQuery in TracksClient waits for it instead of fetching again.
  * Data fetched this way is client data: never read it from a Server Component.
  */
-export default function PreloadTracksPage() {
+export default async function PreloadTracksPage() {
+  // PreloadQuery mints a request-scoped queryRef id with crypto.randomUUID(), which Cache
+  // Components reject during prerendering. connection() defers this render to request time.
+  await connection();
+
   return (
     <PageContainer grid>
       <PreloadQuery query={GetTracksDocument}>

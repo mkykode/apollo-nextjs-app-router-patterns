@@ -1,7 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
+import { Suspense } from "react";
 import logo from "@/assets/space_cat_logo.png";
-import { PatternNav } from "./pattern-nav";
+import { PatternNav, PatternNavLinks } from "./pattern-nav";
 import styles from "./header.module.css";
 
 /** Top navigation: home button plus the pattern switcher. Server Component. */
@@ -27,7 +28,10 @@ export function Header() {
             </div>
           </Link>
         </div>
-        <PatternNav />
+        {/* The pathname is runtime data: stream the active state in, prerender the links. */}
+        <Suspense fallback={<PatternNavLinks pathname="/" />}>
+          <PatternNav />
+        </Suspense>
       </div>
     </header>
   );
