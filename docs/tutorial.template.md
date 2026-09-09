@@ -8,6 +8,7 @@ By the end you will be able to:
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
 - use every caching lever of the classic Next.js model on purpose: `dynamic` (`force-dynamic`, `force-static`, `error`), segment `revalidate`, fetch `next.revalidate` and tags, `generateStaticParams`, `dynamicParams`, `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, from a click and from a form, validate with one Zod schema on both sides, and let the normalized cache do the update
+- use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
@@ -50,10 +51,11 @@ The reference material (pattern table, architecture diagram, interview talking p
 11. [Pattern 5: `useQuery`, the course way](#step-11-pattern-5-usequery-the-course-way)
 12. [Pattern 6: RSC and the Next.js Data Cache](#step-12-pattern-6-rsc-and-the-nextjs-data-cache)
 13. [Forms: a Server Action and a client mutation](#step-13-forms-a-server-action-and-a-client-mutation)
-14. [Errors and retry](#step-14-errors-and-retry)
-15. [Tests](#step-15-tests)
-16. [Build and ship](#step-16-build-and-ship)
-17. [What you learned](#what-you-learned)
+14. [Transitions: keep the old UI while the new one loads](#step-14-transitions-keep-the-old-ui-while-the-new-one-loads)
+15. [Errors and retry](#step-15-errors-and-retry)
+16. [Tests](#step-16-tests)
+17. [Build and ship](#step-17-build-and-ship)
+18. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -415,7 +417,25 @@ Run `pnpm generate`, then render it under `TrackDetail` in `src/app/suspense/tra
 
 **Check:** on http://localhost:3000/rsc/track/c_0, enter `9` and submit: the message appears and the Network tab shows no request. Enter `2`: one POST to the page with a `next-action` header, no GraphQL request from the browser, and the count in the details box goes up by two when the page re-renders. On http://localhost:3000/suspense/track/c_0, enter `2`: two GraphQL POSTs from the browser, and both counts (details box and "Cache says") move at once, before the responses arrive. Stop the API with DevTools offline mode and submit again: the count reverts and the error shows. `e2e/forms.spec.ts` covers both forms; the unit tests cover the schema, the Server Action (with `server-only` and the client mocked), and the optimistic update and rollback with `MockedProvider`.
 
-## Step 14: Errors and retry
+## Step 14: Transitions: keep the old UI while the new one loads
+
+A transition tells React that a state update may take a while and that the current UI should stay on screen until the new one is ready. Three places on this branch already use `useTransition` without much ceremony: the card click awaits the mutation before navigating, the preload page's **Refresh view count** wraps `refetch()`, and `error.tsx` wraps `retry()`. The two components below make the effect visible.
+
+**A suspense query whose variables change.** This is the case transitions exist for in Apollo. Changing the select gives `useSuspenseQuery` new variables, so the component suspends again. Without `startTransition`, the nearest Suspense fallback replaces the preview until the data arrives. Inside `startTransition`, React keeps the previous preview on screen and only swaps when the new one is ready, and `isPending` lets you dim it. The checkbox switches between the two so you can watch the difference.
+
+@@include(src/components/track-preview.tsx)@@
+
+Render it under the client form in `src/app/suspense/track/[trackId]/page.tsx`.
+
+**A Server Action from a button.** React 19 transitions accept an async function, and `isPending` stays true until everything inside has settled. That fits a Server Action called outside a form: await it, then `router.refresh()` to re-fetch the route's RSC payload in the same transition. The page updates in place, with no form and no fallback.
+
+@@include(src/components/quick-view-button.tsx)@@
+
+Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
+
+**Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
+
+## Step 15: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -423,9 +443,9 @@ There is a trap. Apollo's suspense hooks keep a rejected result in their cache u
 
 @@include(src/app/error.tsx)@@
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 15 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 16 adds a test that proves recovery from a transient failure.
 
-## Step 15: Tests
+## Step 16: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -446,11 +466,11 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 9 files, 31 tests
-pnpm test:e2e         # builds, starts the server, 15 tests
+pnpm vitest run       # 10 files, 34 tests
+pnpm test:e2e         # builds, starts the server, 17 tests
 ```
 
-## Step 16: Build and ship
+## Step 17: Build and ship
 
 ```sh
 pnpm build
@@ -479,6 +499,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - Suspense hooks turn streaming SSR on. `useQuery` ships a spinner; `useSuspenseQuery` ships the data and a warm cache.
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
 - A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself; `optimisticResponse` moves it before the server answers, and `useFragment` lets any component read the entity live. When there is no browser cache, use a Server Action, from a click or a `<form action>`, and let Next.js re-render the route.
+- `startTransition` keeps the current UI while a suspense query re-runs with new variables or a Server Action runs from a button; `isPending` is the dim-or-disable signal.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
 - Next.js caching is decided per route and per fetch: `dynamic` for the rendering mode, `revalidate` at the segment or the fetch, `generateStaticParams` for known paths, and three invalidation APIs: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 

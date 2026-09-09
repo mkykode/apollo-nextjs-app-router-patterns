@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { QuickViewButton } from "@/components/quick-view-button";
 import { RegisterViewForm } from "@/components/register-view-form";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
@@ -28,6 +29,7 @@ export default async function RscTrackPage({ params }: Props) {
   return (
     <PageContainer>
       <TrackDetail track={data.track} />
+      <QuickViewButton trackId={trackId} />
       <RegisterViewForm trackId={trackId} />
     </PageContainer>
   );
