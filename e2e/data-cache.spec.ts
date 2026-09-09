@@ -1,7 +1,8 @@
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import { GRAPHQL_URI } from "../src/lib/graphql-uri";
 
-const TRACK = { id: "c_0", title: "Cat-stronomy, an introduction" };
+// A track no other spec opens: their Server Actions call updateTag on the track they click.
+const TRACK = { id: "c_1", title: "Famous Catstronauts" };
 
 const VIEWS = /(\d+) view\(s\)/;
 
@@ -10,6 +11,21 @@ async function renderedViews(request: APIRequestContext, path: string) {
   const match = VIEWS.exec(html);
   if (!match) throw new Error(`no view count in ${path}`);
   return Number.parseInt(match[1], 10);
+}
+
+/**
+ * The cache is stale-while-revalidate: a stale entry left by an earlier run is served once and
+ * refreshed in the background. Read until two consecutive responses agree, which means the
+ * entry is fresh and will be served unchanged for the rest of its revalidate window.
+ */
+async function stableViews(request: APIRequestContext, path: string) {
+  let previous = await renderedViews(request, path);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await renderedViews(request, path);
+    if (current === previous) return current;
+    previous = current;
+  }
+  throw new Error(`${path} never settled on a cached view count`);
 }
 
 async function incrementViaApi(request: APIRequestContext) {
@@ -25,7 +41,7 @@ test("/use-cache serves the cached function until a Server Action calls updateTa
   const path = `/use-cache/track/${TRACK.id}`;
 
   // Fill the cache, change the source of truth behind its back, and read again: still cached.
-  const cached = await renderedViews(request, path);
+  const cached = await stableViews(request, path);
   await incrementViaApi(request);
   expect(await renderedViews(request, path)).toBe(cached);
 

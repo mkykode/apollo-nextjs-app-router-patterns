@@ -23,6 +23,16 @@ pnpm test         # unit tests
 pnpm test:e2e     # Playwright against a production build
 ```
 
+## Branches
+
+| Branch | What it is | Switch |
+| --- | --- | --- |
+| `course` | The finished Odyssey course app: Vite, React Router, Apollo Client 3 | `git checkout course` |
+| `dynamic` | The rebuild under the classic Next.js rendering model: `export const dynamic`, fetch `revalidate` and tags, route `/revalidate` | `git checkout dynamic` |
+| `use-cache` | The same rebuild under Cache Components: `"use cache"`, `cacheLife`, `cacheTag`, `connection()`, route `/use-cache` | `git checkout use-cache` |
+
+You are reading the `use-cache` branch. The two rendering models cannot coexist in one app, which is why they are branches; `git diff dynamic use-cache -- src` shows everything the model changes.
+
 The reference material (pattern table, architecture diagram, interview talking points, known quirks) lives in [docs/patterns.md](docs/patterns.md).
 
 ## Contents
