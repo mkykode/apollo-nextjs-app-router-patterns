@@ -12,7 +12,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest",
     "generate": "graphql-codegen --config codegen.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "docs:readme": "node scripts/build-readme.mjs"
   },
   "dependencies": {
     "@apollo/client": "^4.2.12",

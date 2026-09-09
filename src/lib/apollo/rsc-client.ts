@@ -18,18 +18,17 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
  * - getClient(): the per-request client (query, mutate, readQuery...)
  * - query(): shortcut for getClient().query()
  * - PreloadQuery: start a request in RSC and hand the result to Client Components
+ *
+ * Caching is decided per route, not here. On the server, HttpLink hands `fetchOptions` to
+ * Next.js's patched fetch, so Next-only options apply: a route can pass
+ * `context: { fetchOptions: { next: { revalidate, tags } } }` to store a response in the
+ * Data Cache (see /cached), or export `dynamic = "force-dynamic"` to render per request
+ * (see the layout.tsx of /rsc). Without either, Next.js fetches once at build time.
  */
 export const { getClient, query, PreloadQuery } = registerApolloClient(
   () =>
     new ApolloClient({
       cache: new InMemoryCache(),
-      link: new HttpLink({
-        uri: GRAPHQL_URI,
-        // Next.js fetch options go here. `no-store` keeps responses out of the Data Cache and
-        // marks every route that awaits this client as dynamic, so the RSC pages stay live even
-        // without the layout-level `dynamic = "force-dynamic"`. Use `next: { revalidate: 60 }`
-        // instead to cache GraphQL responses for a minute.
-        fetchOptions: { cache: "no-store" },
-      }),
+      link: new HttpLink({ uri: GRAPHQL_URI }),
     }),
 );

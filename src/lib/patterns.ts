@@ -5,7 +5,8 @@ export type PatternSlug =
   | "suspense"
   | "preload"
   | "background"
-  | "legacy";
+  | "legacy"
+  | "cached";
 
 export interface Pattern {
   slug: PatternSlug;
@@ -61,6 +62,14 @@ export const PATTERNS: readonly Pattern[] = [
     shipsDataInHtml: false,
     summary:
       "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
+  },
+  {
+    slug: "cached",
+    title: "RSC + Data Cache",
+    fetchedBy: "Server Component",
+    shipsDataInHtml: true,
+    summary:
+      "The RSC pattern with Next.js caching: each query opts into the Data Cache with revalidate and tags, the route is static, and the Server Action calls updateTag so a click shows fresh data.",
   },
 ];
 

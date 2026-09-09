@@ -1,7 +1,9 @@
 "use server";
 
+import { updateTag } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
+import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
 
 const TRACK_ID = /^[\w-]{1,64}$/;
 
@@ -20,4 +22,17 @@ export async function incrementTrackViews(trackId: string) {
     variables: { trackId },
   });
   return data?.incrementTrackViews ?? null;
+}
+
+/**
+ * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
+ * updateTag expires the tagged entries immediately, so the render triggered by this
+ * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
+ * instead serve the stale entry once more while refreshing in the background.
+ */
+export async function incrementTrackViewsAndUpdateCache(trackId: string) {
+  const result = await incrementTrackViews(trackId);
+  updateTag(TRACKS_TAG);
+  updateTag(trackTag(trackId));
+  return result;
 }

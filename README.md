@@ -1,11 +1,12 @@
 # Tutorial: Catstronauts on the Next.js App Router with Apollo Client 4
 
-You finished Apollo Odyssey's [Client-side GraphQL with React & Apollo](https://odyssey.apollographql.com/client-side-graphql-react). That app is a Vite single-page app: every query runs in the browser with `useQuery`. This tutorial rebuilds it on the **Next.js 16 App Router** with **Apollo Client 4** and [`@apollo/client-integration-nextjs`](https://github.com/apollographql/apollo-client-integrations), and renders the same two pages (track list, track detail) **five times, once per data-fetching pattern**, so you can compare them on live data.
+You finished Apollo Odyssey's [Client-side GraphQL with React & Apollo](https://odyssey.apollographql.com/client-side-graphql-react). That app is a Vite single-page app: every query runs in the browser with `useQuery`. This tutorial rebuilds it on the **Next.js 16 App Router** with **Apollo Client 4** and [`@apollo/client-integration-nextjs`](https://github.com/apollographql/apollo-client-integrations), and renders the same two pages (track list, track detail) **six times, once per data-fetching pattern**, so you can compare them on live data.
 
 By the end you will be able to:
 
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
+- decide per route whether Next.js renders on every request or serves the Data Cache, with `dynamic`, `revalidate`, tags, and `updateTag`
 - run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -37,10 +38,11 @@ The reference material (pattern table, architecture diagram, interview talking p
 9. [Pattern 3: `PreloadQuery`](#step-9-pattern-3-preloadquery)
 10. [Pattern 4: `useBackgroundQuery`](#step-10-pattern-4-usebackgroundquery)
 11. [Pattern 5: `useQuery`, the course way](#step-11-pattern-5-usequery-the-course-way)
-12. [Errors and retry](#step-12-errors-and-retry)
-13. [Tests](#step-13-tests)
-14. [Build and ship](#step-14-build-and-ship)
-15. [What you learned](#what-you-learned)
+12. [Pattern 6: RSC and the Next.js Data Cache](#step-12-pattern-6-rsc-and-the-nextjs-data-cache)
+13. [Errors and retry](#step-13-errors-and-retry)
+14. [Tests](#step-14-tests)
+15. [Build and ship](#step-15-build-and-ship)
+16. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -85,7 +87,8 @@ Replace the dependency blocks in `package.json`. The versions here are the ones 
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest",
     "generate": "graphql-codegen --config codegen.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "docs:readme": "node scripts/build-readme.mjs"
   },
   "dependencies": {
     "@apollo/client": "^4.2.12",
@@ -306,11 +309,6 @@ export const viewport: Viewport = {
   themeColor: "#000000",
 };
 
-// Client Component patterns fetch during SSR through the browser-side Apollo link, which
-// Next.js cannot see. Without this they would be prerendered at build time with a stale
-// transported cache. RSC routes are already dynamic through their `no-store` fetch option.
-export const dynamic = "force-dynamic";
-
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${sourceSans.variable} ${sourceCode.variable}`}>
@@ -529,19 +527,18 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
  * - getClient(): the per-request client (query, mutate, readQuery...)
  * - query(): shortcut for getClient().query()
  * - PreloadQuery: start a request in RSC and hand the result to Client Components
+ *
+ * Caching is decided per route, not here. On the server, HttpLink hands `fetchOptions` to
+ * Next.js's patched fetch, so Next-only options apply: a route can pass
+ * `context: { fetchOptions: { next: { revalidate, tags } } }` to store a response in the
+ * Data Cache (see /cached), or export `dynamic = "force-dynamic"` to render per request
+ * (see the layout.tsx of /rsc). Without either, Next.js fetches once at build time.
  */
 export const { getClient, query, PreloadQuery } = registerApolloClient(
   () =>
     new ApolloClient({
       cache: new InMemoryCache(),
-      link: new HttpLink({
-        uri: GRAPHQL_URI,
-        // Next.js fetch options go here. `no-store` keeps responses out of the Data Cache and
-        // marks every route that awaits this client as dynamic, so the RSC pages stay live even
-        // without the layout-level `dynamic = "force-dynamic"`. Use `next: { revalidate: 60 }`
-        // instead to cache GraphQL responses for a minute.
-        fetchOptions: { cache: "no-store" },
-      }),
+      link: new HttpLink({ uri: GRAPHQL_URI }),
     }),
 );
 ```
@@ -604,7 +601,8 @@ export type PatternSlug =
   | "suspense"
   | "preload"
   | "background"
-  | "legacy";
+  | "legacy"
+  | "cached";
 
 export interface Pattern {
   slug: PatternSlug;
@@ -660,6 +658,14 @@ export const PATTERNS: readonly Pattern[] = [
     shipsDataInHtml: false,
     summary:
       "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
+  },
+  {
+    slug: "cached",
+    title: "RSC + Data Cache",
+    fetchedBy: "Server Component",
+    shipsDataInHtml: true,
+    summary:
+      "The RSC pattern with Next.js caching: each query opts into the Data Cache with revalidate and tags, the route is static, and the Server Action calls updateTag so a click shows fresh data.",
   },
 ];
 
@@ -857,8 +863,10 @@ Because there is no browser cache to update, the mutation runs in a Server Actio
 // src/lib/actions/increment-track-views.ts
 "use server";
 
+import { updateTag } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
+import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
 
 const TRACK_ID = /^[\w-]{1,64}$/;
 
@@ -877,6 +885,19 @@ export async function incrementTrackViews(trackId: string) {
     variables: { trackId },
   });
   return data?.incrementTrackViews ?? null;
+}
+
+/**
+ * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
+ * updateTag expires the tagged entries immediately, so the render triggered by this
+ * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
+ * instead serve the stale entry once more while refreshing in the background.
+ */
+export async function incrementTrackViewsAndUpdateCache(trackId: string) {
+  const result = await incrementTrackViews(trackId);
+  updateTag(TRACKS_TAG);
+  updateTag(trackTag(trackId));
+  return result;
 }
 ```
 
@@ -919,6 +940,13 @@ export default async function RscTrackPage({ params }: Props) {
 ```
 
 `params` is a Promise in Next 16; `PageProps<"/rsc/track/[trackId]">` is a global helper generated by `next typegen`.
+
+One more file. Next.js's default for a `fetch` with no options is `auto no cache`: it fetches once during `next build` and prerenders the route with that data, unless the route reads a request-time API. Nothing here does, so the view counts would freeze at build time. A segment config in the folder's layout makes every route below it render per request:
+
+```tsx
+// src/app/rsc/layout.tsx
+
+```
 
 **Check:**
 
@@ -969,6 +997,8 @@ export default function RouteLoading() {
   );
 }
 ```
+
+This pattern needs the same `layout.tsx` with `dynamic = "force-dynamic"` as Step 7: its SSR request goes through the Client Component link, which has no Next.js options, so without the segment config the route would be prerendered at build with a stale transported cache. Copy `src/app/rsc/layout.tsx` to `src/app/suspense/layout.tsx` and rename the component.
 
 ```tsx
 // src/app/suspense/page.tsx
@@ -1153,7 +1183,7 @@ export function TrackClient({ queryRef }: TrackClientProps) {
 }
 ```
 
-Data that arrives this way is client data. Never read it from a Server Component; the integration creates a separate client for `PreloadQuery` to make that hard to do by accident.
+Data that arrives this way is client data. Never read it from a Server Component; the integration creates a separate client for `PreloadQuery` to make that hard to do by accident. Add the same `layout.tsx` segment config as the previous steps (`src/app/preload/layout.tsx`).
 
 **Check:** open http://localhost:3000/preload/track/c_0. Note the view count. Increment it from outside the app:
 
@@ -1238,6 +1268,8 @@ function TrackReader({ queryRef }: { queryRef: QueryRef<GetTrackQuery> }) {
   return <TrackDetail track={data.track} />;
 }
 ```
+
+Add `src/app/background/layout.tsx` with the segment config, like Step 8.
 
 **Check:** http://localhost:3000/background behaves like Step 8: data in the SSR HTML, no browser GraphQL request after load.
 
@@ -1335,9 +1367,148 @@ export default function LegacyTrackPage({ params }: PageProps<"/legacy/track/[tr
 }
 ```
 
+No `layout.tsx` here: nothing fetches on the server, so letting Next.js prerender the spinner shell at build time is correct.
+
 **Check:** `curl -s http://localhost:3000/legacy | grep -c "Cat-stronomy"` prints `0`, and `curl -s http://localhost:3000/legacy | grep -c progressbar` prints `1`: the HTML has the spinner, not the data. In the browser, the Network tab shows a GraphQL request after hydration.
 
-## Step 12: Errors and retry
+## Step 12: Pattern 6: RSC and the Next.js Data Cache
+
+Everything so far renders on every request. Next.js can also cache the GraphQL response itself. On the server, `HttpLink` hands `fetchOptions` to Next's patched `fetch`, so the Next-only options `next.revalidate` and `next.tags` work, per query, through `context.fetchOptions`. Tags let a Server Action expire exactly the entries a mutation touched:
+
+```ts
+// src/lib/cache-tags.ts
+/** Next.js Data Cache tags used by the /cached pattern and its Server Action. */
+export const TRACKS_TAG = "tracks";
+
+export const trackTag = (trackId: string) => `track:${trackId}`;
+```
+
+```tsx
+// src/app/cached/page.tsx
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackGrid } from "@/components/track-grid";
+import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
+import { query } from "@/lib/apollo/rsc-client";
+import { TRACKS_TAG } from "@/lib/cache-tags";
+
+/**
+ * Pattern 6: RSC + the Next.js Data Cache.
+ * Same client and query as /rsc, but the response is stored in Next's Data Cache for a
+ * minute and tagged. Next.js serves the cached response and refreshes it in the background
+ * (stale-while-revalidate), and the route itself is prerendered: check the build output.
+ * A click runs a Server Action that calls updateTag, so the next render is fresh.
+ */
+export default async function CachedTracksPage() {
+  const { data } = await query({
+    query: GetTracksDocument,
+    errorPolicy: "none",
+    context: { fetchOptions: { next: { revalidate: 60, tags: [TRACKS_TAG] } } },
+  });
+
+  return (
+    <PageContainer grid>
+      <TrackGrid
+        tracks={data.tracksForHome}
+        pattern="cached"
+        onOpenTrack={incrementTrackViewsAndUpdateCache}
+      />
+    </PageContainer>
+  );
+}
+```
+
+The detail page tags each track on its own:
+
+```tsx
+// src/app/cached/track/[trackId]/page.tsx
+import type { Metadata } from "next";
+import { GetTrackDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackDetail } from "@/components/track-detail";
+import { query } from "@/lib/apollo/rsc-client";
+import { trackTag } from "@/lib/cache-tags";
+
+type Props = PageProps<"/cached/track/[trackId]">;
+
+/** One tag per track, so a Server Action can expire exactly this page. */
+const getTrack = (trackId: string) =>
+  query({
+    query: GetTrackDocument,
+    variables: { trackId },
+    errorPolicy: "none",
+    context: { fetchOptions: { next: { revalidate: 60, tags: [trackTag(trackId)] } } },
+  });
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { trackId } = await params;
+  const { data } = await getTrack(trackId);
+  return { title: data.track.title };
+}
+
+export default async function CachedTrackPage({ params }: Props) {
+  const { trackId } = await params;
+  const { data } = await getTrack(trackId);
+
+  return (
+    <PageContainer>
+      <TrackDetail track={data.track} />
+    </PageContainer>
+  );
+}
+```
+
+Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` is the read-your-own-writes tool: it expires the tag immediately, so the render caused by this click is fresh. `revalidateTag(tag, "max")` is the softer alternative: serve the stale entry once more and refresh in the background.
+
+```ts
+// src/lib/actions/increment-track-views.ts
+"use server";
+
+import { updateTag } from "next/cache";
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+import { getClient } from "@/lib/apollo/rsc-client";
+import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
+
+const TRACK_ID = /^[\w-]{1,64}$/;
+
+/**
+ * Server Action version of the mutation: the browser posts to Next.js, and the
+ * GraphQL request is made server-side with the RSC client. Use this when the
+ * page itself was rendered in RSC, because there is no browser cache to update.
+ */
+export async function incrementTrackViews(trackId: string) {
+  // Every "use server" export is a public endpoint: validate before forwarding.
+  if (typeof trackId !== "string" || !TRACK_ID.test(trackId)) {
+    throw new Error("Invalid track id");
+  }
+  const { data } = await getClient().mutate({
+    mutation: IncrementTrackViewsDocument,
+    variables: { trackId },
+  });
+  return data?.incrementTrackViews ?? null;
+}
+
+/**
+ * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
+ * updateTag expires the tagged entries immediately, so the render triggered by this
+ * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
+ * instead serve the stale entry once more while refreshing in the background.
+ */
+export async function incrementTrackViewsAndUpdateCache(trackId: string) {
+  const result = await incrementTrackViews(trackId);
+  updateTag(TRACKS_TAG);
+  updateTag(trackTag(trackId));
+  return result;
+}
+```
+
+Register the pattern in `src/lib/patterns.ts` (slug `cached`) and the header, index page, and tests pick it up.
+
+No `layout.tsx` for this folder. The only fetch is cached, and no request-time API is read, so Next.js prerenders the route and revalidates it in the background: Incremental Static Regeneration, by opting a single fetch into the cache.
+
+**Check:** open http://localhost:3000/cached/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/cached` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
+
+## Step 13: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -1396,9 +1567,9 @@ export default function RouteError({
 }
 ```
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 13 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 14 adds a test that proves recovery from a transient failure.
 
-## Step 13: Tests
+## Step 14: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -1525,17 +1696,17 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 10 tests
+pnpm test:e2e         # builds, starts the server, 12 tests
 ```
 
-## Step 14: Build and ship
+## Step 15: Build and ship
 
 ```sh
 pnpm build
 pnpm start
 ```
 
-Every route shows as `ƒ (Dynamic)`. Two settings make that true. The RSC link's `cache: "no-store"` marks the RSC routes dynamic on its own. The Client Component patterns fetch during SSR through the browser-side link, which Next.js cannot see, so the root layout also exports `dynamic = "force-dynamic"`; without it those routes would be prerendered at build time with a stale transported cache.
+Read the route table the build prints. `/rsc`, `/suspense`, `/preload`, and `/background` are `ƒ (Dynamic)` because of their layout's `dynamic = "force-dynamic"`. `/`, `/legacy`, and `/cached` are static: prerendered at build, and `/cached` is refreshed in the background because its fetch opted into the Data Cache with `revalidate`. This is the classic rendering model. Next.js 16's Cache Components (`cacheComponents: true`) inverts it: everything is dynamic unless a function or component says `"use cache"`, with `cacheLife` and `cacheTag` replacing `revalidate` and `next.tags`. The `cache-components` branch of this repo shows the same app under that model.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -1549,5 +1720,8 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
 - A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
+- Next.js caching is decided per route and per fetch: `dynamic = "force-dynamic"` for live data, `next.revalidate` plus tags for cached data, `updateTag` in a Server Action to read your own writes.
 
-Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, then try `cacheComponents: true` (delete the layout's `force-dynamic` first), Apollo's data masking with `useFragment`, and `@defer` with `SSRMultipartLink`.
+Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, compare with the `cache-components` branch, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
+
+The README is generated from `docs/tutorial.template.md` by `pnpm docs:readme`, which inlines the source files. Edit the template or the code, then regenerate; do not edit README.md by hand.

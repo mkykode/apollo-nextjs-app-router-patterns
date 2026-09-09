@@ -32,11 +32,6 @@ export const viewport: Viewport = {
   themeColor: "#000000",
 };
 
-// Client Component patterns fetch during SSR through the browser-side Apollo link, which
-// Next.js cannot see. Without this they would be prerendered at build time with a stale
-// transported cache. RSC routes are already dynamic through their `no-store` fetch option.
-export const dynamic = "force-dynamic";
-
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${sourceSans.variable} ${sourceCode.variable}`}>
