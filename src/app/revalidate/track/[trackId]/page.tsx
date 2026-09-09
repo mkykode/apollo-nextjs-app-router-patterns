@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
+import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
 import { trackTag } from "@/lib/cache-tags";
 
@@ -30,7 +31,7 @@ const getTrack = (trackId: string) =>
     variables: { trackId },
     errorPolicy: "none",
     context: { fetchOptions: { next: { revalidate: 60, tags: [trackTag(trackId)] } } },
-  });
+  }).catch(rethrowAsNotFound);
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;

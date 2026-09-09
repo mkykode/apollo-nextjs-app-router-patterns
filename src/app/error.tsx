@@ -3,7 +3,9 @@
 import { useApolloClient } from "@apollo/client/react";
 import { useTransition } from "react";
 import { Button } from "@/components/button";
+import { NotFoundMessage } from "@/components/not-found-message";
 import { PageContainer } from "@/components/page-container";
+import { isNotFoundError } from "@/lib/apollo/not-found";
 import styles from "./error.module.css";
 
 /**
@@ -22,7 +24,18 @@ export default function RouteError({
   retry: () => void;
 }) {
   const client = useApolloClient();
+
   const [isPending, startTransition] = useTransition();
+
+  // A Client Component pattern asked the API for an unknown id: the GraphQL error reaches this
+  // boundary in the browser. Server Components call notFound() before it gets this far.
+  if (isNotFoundError(error)) {
+    return (
+      <PageContainer>
+        <NotFoundMessage />
+      </PageContainer>
+    );
+  }
 
   const handleRetry = () =>
     startTransition(async () => {

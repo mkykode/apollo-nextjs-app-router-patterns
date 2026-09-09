@@ -287,9 +287,9 @@ The Client Component version. Add the mutation hook the client patterns share. T
 
 @@include(src/lib/hooks/use-increment-track-views.ts)@@
 
-A route-level `loading.tsx` is the Suspense boundary. The shell streams first, the data follows.
+A `loading.tsx` in the pattern's folder is the Suspense boundary. The shell streams first, the data follows. It lives in the pattern folder rather than at the root on purpose: a boundary above a page sends the 200 shell before the page runs, which makes a real 404 status impossible for the routes underneath (the not-found step shows both outcomes).
 
-@@include(src/app/loading.tsx)@@
+@@include(src/app/suspense/loading.tsx)@@
 
 This pattern needs the same `layout.tsx` with `dynamic = "force-dynamic"` as Step 7: its SSR request goes through the Client Component link, which has no Next.js options, so without the segment config the route would be prerendered at build with a stale transported cache. Copy `src/app/rsc/layout.tsx` to `src/app/suspense/layout.tsx` and rename the component.
 
@@ -472,7 +472,7 @@ There is a trap. Apollo's suspense hooks keep a rejected result in their cache u
 
 @@include(src/app/error.tsx)@@
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 17 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`, a GraphQL error carrying the upstream REST status in its extensions. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 17 adds a test that proves recovery from a transient failure.
 
 ## Step 17: Tests
 

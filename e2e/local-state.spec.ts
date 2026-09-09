@@ -13,6 +13,7 @@ test("favorites live in a reactive variable and reach the header and a cache fie
   // Client-side navigation keeps the browser's Apollo state. On a client pattern the Track
   // entity is in the cache, so the @client field can be read through useFragment.
   await page.getByRole("link", { name: "useSuspenseQuery" }).click();
+  await expect(page).toHaveURL("/suspense");
   await page.getByRole("link", { name: "Cat-stronomy, an introduction" }).click();
   await expect(page).toHaveURL("/suspense/track/c_0");
   await expect(page.getByTestId("favorite-status")).toContainText("♥ In your favorites");

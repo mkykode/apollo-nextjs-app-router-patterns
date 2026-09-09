@@ -1,0 +1,146 @@
+.line,
+.image,
+.avatar,
+.cover {
+  background: linear-gradient(90deg, var(--silver-base) 25%, var(--silver-lighter) 50%, var(--silver-base) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line,
+  .image,
+  .avatar,
+  .cover {
+    animation: none;
+  }
+}
+
+/* Same box as TrackCard so nothing shifts when the real cards arrive. */
+.grid {
+  display: contents;
+}
+
+.card {
+  height: 380px;
+  margin: 10px;
+  border-radius: 6px;
+  background-color: white;
+  box-shadow: 0px 1px 5px 0px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 480px) {
+  .card {
+    width: 90%;
+  }
+}
+
+@media (min-width: 768px) {
+  .card {
+    width: 47%;
+  }
+}
+
+@media (min-width: 992px) {
+  .card {
+    width: 31%;
+  }
+}
+
+.image {
+  height: 220px;
+  border-radius: 0;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  padding: 18px;
+}
+
+.footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.line {
+  height: 14px;
+  margin: 4px 0;
+}
+
+.title {
+  height: 22px;
+  width: 70%;
+  align-self: center;
+}
+
+.short {
+  width: 120px;
+}
+
+.shorter {
+  width: 80px;
+}
+
+/* Same footprint as TrackDetail's cover and panel. */
+.detail {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  max-width: var(--width-text-page);
+  width: 100%;
+  align-self: center;
+}
+
+.cover {
+  height: 400px;
+  margin-bottom: 30px;
+}
+
+.panel {
+  padding: 20px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-dark);
+  background-color: var(--silver-lighter);
+}
+
+.heading {
+  height: 40px;
+  width: 60%;
+  margin: 0 auto 25px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.more {
+  max-width: var(--width-text-page);
+  width: 100%;
+  align-self: center;
+  padding: 20px;
+}
