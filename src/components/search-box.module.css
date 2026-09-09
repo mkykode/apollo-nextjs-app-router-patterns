@@ -1,0 +1,44 @@
+.box {
+  width: 100%;
+  padding: 10px;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: solid 1px var(--silver-darker);
+  background-color: white;
+  font: inherit;
+  color: var(--color-text);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--pink-base);
+  outline-offset: 1px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Same layout as PageContainer's grid, so the cards keep their widths inside the wrapper. */
+.results {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+  transition: opacity 150ms ease-in;
+}
+
+.results[data-stale="true"] {
+  opacity: 0.6;
+}
