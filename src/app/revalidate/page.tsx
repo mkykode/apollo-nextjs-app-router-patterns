@@ -3,21 +3,22 @@ import { PageContainer } from "@/components/page-container";
 import { TrackGrid } from "@/components/track-grid";
 import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
 import { query } from "@/lib/apollo/rsc-client";
-import { TRACKS_TAG } from "@/lib/cache-tags";
+
+/**
+ * Segment-level caching: the whole page is prerendered and regenerated at most once a minute
+ * (Incremental Static Regeneration). The fetch inside needs no options; it simply runs whenever
+ * the page is regenerated. Invalidate it by path: the Server Action calls revalidatePath.
+ */
+export const revalidate = 60;
 
 /**
  * Pattern 6: RSC + the Next.js Data Cache.
- * Same client and query as /rsc, but the response is stored in Next's Data Cache for a
- * minute and tagged. Next.js serves the cached response and refreshes it in the background
- * (stale-while-revalidate), and the route itself is prerendered: check the build output.
- * A click runs a Server Action that calls updateTag, so the next render is fresh.
+ * Same client and query as /rsc, but nothing here is fetched per request. This list page is
+ * cached at the segment level (above); the detail page caches at the fetch level with tags.
+ * A click runs a Server Action that invalidates both, so the next render is fresh.
  */
 export default async function CachedTracksPage() {
-  const { data } = await query({
-    query: GetTracksDocument,
-    errorPolicy: "none",
-    context: { fetchOptions: { next: { revalidate: 60, tags: [TRACKS_TAG] } } },
-  });
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
 
   return (
     <PageContainer grid>

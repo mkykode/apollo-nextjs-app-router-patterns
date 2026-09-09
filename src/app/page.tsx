@@ -4,6 +4,13 @@ import { PATTERNS, tracksHref } from "@/lib/patterns";
 import styles from "./page.module.css";
 
 /**
+ * Nothing here depends on the request, so the page is prerendered. `dynamic = "error"` turns that
+ * into a guarantee: if someone later reads cookies(), headers(), or searchParams here, the build
+ * fails instead of silently making the page dynamic.
+ */
+export const dynamic = "error";
+
+/**
  * Index of the data-fetching patterns. Each one renders the same Catstronauts pages
  * (track list and track detail) with a different Apollo Client strategy.
  */

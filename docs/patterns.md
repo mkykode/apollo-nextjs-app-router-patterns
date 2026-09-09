@@ -84,7 +84,22 @@ src/
 
 **Errors.** Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Passing `errorPolicy: "none"` explicitly narrows `data` to a defined value in TypeScript. The boundary's `retry()` (Next 16.3) re-fetches the segment; `reset()` only re-renders it. One trap: Suspense hooks keep a rejected result in their suspense cache until it auto-disposes (30 s by default), so `retry()` alone re-throws the same error. `error.tsx` refetches the still-watched queries before calling `retry()`; `e2e/error-recovery.spec.ts` proves the recovery by blocking GraphQL during a client-side navigation and lifting the block. In production, errors thrown while rendering Server Components are redacted (React error #441) and only a `digest` reaches the boundary.
 
-**Caching layers.** Apollo's `InMemoryCache` is per instance (per request on the server, per tab in the browser). Next.js adds the fetch Data Cache on top: `HttpLink({ fetchOptions: { next: { revalidate: 60 } } })` or `context.fetchOptions` per query. Each pattern folder decides: `/rsc`, `/suspense`, `/preload`, and `/background` export `dynamic = "force-dynamic"` from their `layout.tsx`, because Next's default (`auto no cache`) would fetch once at build and prerender stale data. `/revalidate` does the opposite: its queries pass `next: { revalidate: 60, tags }` through `context.fetchOptions`, so the route is prerendered and refreshed in the background, and a Server Action calls `updateTag` to expire exactly the touched entries (read-your-own-writes; `revalidateTag(tag, "max")` is the stale-while-revalidate alternative). Under Cache Components (`cacheComponents: true`) the model inverts: everything is dynamic unless marked `"use cache"` with `cacheLife`/`cacheTag`; see the `use-cache` branch.
+**Caching layers.** Apollo's `InMemoryCache` is per instance (per request on the server, per tab in the browser). Next.js adds the fetch Data Cache on top: `HttpLink({ fetchOptions: { next: { revalidate: 60 } } })` or `context.fetchOptions` per query. Every lever of the classic model is used once on this branch, each where it makes sense:
+
+| Lever | Where | Effect |
+| --- | --- | --- |
+| `dynamic = "force-dynamic"` | `src/app/{rsc,suspense,preload,background}/layout.tsx` | Render per request; the default (`auto no cache`) would fetch once at build and prerender stale data |
+| `dynamic = "force-static"` | `src/app/legacy/layout.tsx` | Keep the spinner shell static even if a request-time API appears (it returns empty values) |
+| `dynamic = "error"` | `src/app/page.tsx` | Fail the build if the index page ever reads request-time data |
+| `revalidate = 60` (segment) | `src/app/revalidate/page.tsx` | ISR: the page regenerates at most once a minute; the fetch needs no options |
+| `next: { revalidate, tags }` (fetch) | `src/app/revalidate/track/[trackId]/page.tsx` via `context.fetchOptions` | Cache one GraphQL response under a tag |
+| `generateStaticParams` + `dynamicParams` | same file | Prerender a page per known track at build; unknown ids render on demand |
+| `updateTag` | `src/lib/actions/increment-track-views.ts` | Expire a tag immediately (read-your-own-writes), Server Actions only |
+| `revalidatePath` | same file | Regenerate the segment-cached list on its next request |
+| `revalidateTag(tag, "max")` | `src/app/api/revalidate/route.ts` | Stale-while-revalidate from a webhook-style route handler; the profile argument is required in Next 16 |
+| `fetchCache` | not used | Changes the default `cache` option for a whole segment; adds nothing with one query per page |
+
+Under Cache Components (`cacheComponents: true`) the model inverts: everything is dynamic unless marked `"use cache"` with `cacheLife`/`cacheTag`, and the `dynamic`, `revalidate`, and `fetchCache` configs are build errors; see the `use-cache` branch.
 
 **Codegen and fragments.** Operations live in `.graphql` files. Each component owns a fragment named `Component_prop` and the page query spreads it, so the query mirrors the component tree. Codegen emits typed documents; hooks infer `data` from them, never from manual generics. Apollo's data masking (`dataMasking: true` + `useFragment`) is deliberately off: masking is unmasked through the client cache, and the same presentational components render RSC data here, which never enters that cache.
 

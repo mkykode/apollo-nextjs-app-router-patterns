@@ -1,9 +1,9 @@
 "use server";
 
-import { updateTag } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
+import { trackTag } from "@/lib/cache-tags";
 
 const TRACK_ID = /^[\w-]{1,64}$/;
 
@@ -25,14 +25,16 @@ export async function incrementTrackViews(trackId: string) {
 }
 
 /**
- * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
- * updateTag expires the tagged entries immediately, so the render triggered by this
- * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
- * instead serve the stale entry once more while refreshing in the background.
+ * Same mutation, for the /revalidate pattern, followed by both on-demand invalidation APIs:
+ * - updateTag expires the track's tagged fetch entry immediately, so the render triggered by
+ *   this click reads the new count (read-your-own-writes).
+ * - revalidatePath marks the segment-cached list page for regeneration on its next request.
+ * revalidateTag(tag, "max") is the third option, used by /api/revalidate: serve the stale
+ * entry once more while refreshing in the background.
  */
 export async function incrementTrackViewsAndUpdateCache(trackId: string) {
   const result = await incrementTrackViews(trackId);
-  updateTag(TRACKS_TAG);
   updateTag(trackTag(trackId));
+  revalidatePath("/revalidate");
   return result;
 }

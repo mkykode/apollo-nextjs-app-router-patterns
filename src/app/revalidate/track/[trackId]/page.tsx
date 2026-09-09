@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { GetTrackDocument } from "@/__generated__/graphql";
+import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
@@ -7,7 +7,23 @@ import { trackTag } from "@/lib/cache-tags";
 
 type Props = PageProps<"/revalidate/track/[trackId]">;
 
-/** One tag per track, so a Server Action can expire exactly this page. */
+/**
+ * Prerender a page per track at build time. generateStaticParams runs the list query once
+ * during `next build`; each returned param becomes a static page.
+ */
+export async function generateStaticParams() {
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
+  return data.tracksForHome.map(({ id }) => ({ trackId: id }));
+}
+
+/** Ids not returned above are rendered on first request and then cached (false would 404). */
+export const dynamicParams = true;
+
+/**
+ * Fetch-level caching: this response lives in the Data Cache for a minute under its own tag,
+ * so a Server Action (updateTag) or the /api/revalidate route handler (revalidateTag) can
+ * expire exactly this track. Passed through Apollo's `context.fetchOptions` to Next's fetch.
+ */
 const getTrack = (trackId: string) =>
   query({
     query: GetTrackDocument,

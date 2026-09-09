@@ -6,7 +6,7 @@ By the end you will be able to:
 
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
-- decide per route whether Next.js renders on every request or serves the Data Cache, with `dynamic`, `revalidate`, tags, and `updateTag`
+- use every caching lever of the classic Next.js model on purpose: `dynamic` (`force-dynamic`, `force-static`, `error`), segment `revalidate`, fetch `next.revalidate` and tags, `generateStaticParams`, `dynamicParams`, `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -231,7 +231,7 @@ All five patterns render the same components. The registry is the single source 
 
 @@include(src/lib/patterns.ts)@@
 
-`PatternNav` (`src/components/pattern-nav.tsx`) is the one Client Component in the header: it reads `usePathname()` and links every pattern to the same sub-path, so you can jump from `/rsc/track/c_0` to `/preload/track/c_0`. The index page (`src/app/page.tsx`) lists the registry; replace the placeholder from Step 3 with the finished file.
+`PatternNav` (`src/components/pattern-nav.tsx`) is the one Client Component in the header: it reads `usePathname()` and links every pattern to the same sub-path, so you can jump from `/rsc/track/c_0` to `/preload/track/c_0`. The index page (`src/app/page.tsx`) lists the registry; replace the placeholder from Step 3 with the finished file. It exports `dynamic = "error"`: the page has no request-time data, and this turns that into a build-time guarantee instead of a silent fallback to dynamic rendering.
 
 `TrackDetail` (`src/components/track-detail.tsx`) is a plain Server Component that takes a `TrackDetail_TrackFragment`. The card and grid are Client Components, and the reason is instructive:
 
@@ -346,31 +346,45 @@ Add `src/app/background/layout.tsx` with the segment config, like Step 8.
 
 @@include(src/app/legacy/track/[trackId]/page.tsx)@@
 
-No `layout.tsx` here: nothing fetches on the server, so letting Next.js prerender the spinner shell at build time is correct.
+This pattern gets a layout too, with the opposite setting. Nothing fetches on the server, so the spinner shell is prerendered, and `force-static` keeps it that way even if a request-time API sneaks in later (it would return empty values rather than flip the route to dynamic):
+
+@@include(src/app/legacy/layout.tsx)@@
 
 **Check:** `curl -s http://localhost:3000/legacy | grep -c "Cat-stronomy"` prints `0`, and `curl -s http://localhost:3000/legacy | grep -c progressbar` prints `1`: the HTML has the spinner, not the data. In the browser, the Network tab shows a GraphQL request after hydration.
 
 ## Step 12: Pattern 6: RSC and the Next.js Data Cache
 
-Everything so far renders on every request. Next.js can also cache the GraphQL response itself. On the server, `HttpLink` hands `fetchOptions` to Next's patched `fetch`, so the Next-only options `next.revalidate` and `next.tags` work, per query, through `context.fetchOptions`. Tags let a Server Action expire exactly the entries a mutation touched:
+Everything so far renders on every request. This pattern uses the caching side of the classic model, and it uses each lever once so you can compare them.
 
-@@include(src/lib/cache-tags.ts)@@
+**Segment-level: `revalidate`.** The list page exports `revalidate = 60`. The whole page is prerendered and regenerated at most once a minute (Incremental Static Regeneration). The fetch inside needs no options; it runs whenever the page regenerates.
 
 @@include(src/app/revalidate/page.tsx)@@
 
-The detail page tags each track on its own:
+**Fetch-level: `next.revalidate` and `next.tags`.** On the server, `HttpLink` hands `fetchOptions` to Next's patched `fetch`, so Next-only options work per query through `context.fetchOptions`. The detail page caches each track's response under its own tag. It also exports `generateStaticParams`, which runs the list query once at build and prerenders a page per track, and `dynamicParams`, which decides what happens for ids that were not in that list.
+
+@@include(src/lib/cache-tags.ts)@@
 
 @@include(src/app/revalidate/track/[trackId]/page.tsx)@@
 
-Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` is the read-your-own-writes tool: it expires the tag immediately, so the render caused by this click is fresh. `revalidateTag(tag, "max")` is the softer alternative: serve the stale entry once more and refresh in the background.
+**On demand, from inside the app.** Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` expires the track's fetch entry immediately, so the render caused by this click is fresh (read-your-own-writes). `revalidatePath` marks the segment-cached list page for regeneration on its next request.
 
 @@include(src/lib/actions/increment-track-views.ts)@@
 
+**On demand, from outside the app.** A CMS or the GraphQL backend would call a webhook after data changes. This route handler is that webhook: `revalidateTag(tag, "max")` is stale-while-revalidate, so the next request still gets the cached entry while a fresh one is fetched in the background. Next 16 requires the profile argument. Set `REVALIDATE_SECRET` in `.env.local` to enable it.
+
+@@include(src/app/api/revalidate/route.ts)@@
+
 Register the pattern in `src/lib/patterns.ts` (slug `revalidate`) and the header, index page, and tests pick it up.
 
-No `layout.tsx` for this folder. The only fetch is cached, and no request-time API is read, so Next.js prerenders the route and revalidates it in the background: Incremental Static Regeneration, by opting a single fetch into the cache.
+No `layout.tsx` for this folder: nothing reads request-time data, so the segment config on the page and the fetch options decide everything. `fetchCache` is the one lever not used here. It changes the default `cache` option for every fetch in a segment; with one query per page it adds nothing over setting the option on the query.
 
-**Check:** open http://localhost:3000/revalidate/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/revalidate` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
+**Check:** open http://localhost:3000/revalidate/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/revalidate` and click the card. The detail page shows the fresh count: the Server Action expired the tag. Then, with `REVALIDATE_SECRET=test` in `.env.local` and the server restarted, increment again and run:
+
+```sh
+curl -s -X POST "http://localhost:3000/api/revalidate?tag=track:c_0&secret=test"
+```
+
+Reload the detail page twice: the first load may still be stale, the second is fresh. `e2e/data-cache.spec.ts` and `e2e/revalidate-route.spec.ts` automate both flows.
 
 ## Step 13: Errors and retry
 
@@ -404,7 +418,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 12 tests
+pnpm test:e2e         # builds, starts the server, 13 tests
 ```
 
 ## Step 15: Build and ship
@@ -414,7 +428,16 @@ pnpm build
 pnpm start
 ```
 
-Read the route table the build prints. `/rsc`, `/suspense`, `/preload`, and `/background` are `ƒ (Dynamic)` because of their layout's `dynamic = "force-dynamic"`. `/`, `/legacy`, and `/revalidate` are static: prerendered at build, and `/revalidate` is refreshed in the background because its fetch opted into the Data Cache with `revalidate`. This is the classic rendering model. Next.js 16's Cache Components (`cacheComponents: true`) inverts it: everything is dynamic unless a function or component says `"use cache"`, with `cacheLife` and `cacheTag` replacing `revalidate` and `next.tags`. The `use-cache` branch of this repo shows the same app under that model.
+Read the route table the build prints; every rendering mode of the classic model is in it.
+
+| Symbol | Routes | Why |
+| --- | --- | --- |
+| `ƒ (Dynamic)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/api/revalidate` | `dynamic = "force-dynamic"` in the pattern's layout; route handlers with `POST` are always dynamic |
+| `○ (Static)` | `/`, `/legacy`, `/legacy/track/[trackId]` | `dynamic = "error"` and `dynamic = "force-static"`; nothing fetches on the server |
+| `○ (Static)` with `1m` | `/revalidate` | `revalidate = 60` on the page segment: ISR |
+| `● (SSG)` with `1m` | `/revalidate/track/c_0` … | `generateStaticParams` prerendered every track; each fetch is cached for a minute under its tag |
+
+This is the classic rendering model. Next.js 16's Cache Components (`cacheComponents: true`) inverts it: everything is dynamic unless a function or component says `"use cache"`, with `cacheLife` and `cacheTag` replacing `revalidate` and `next.tags`, and the `dynamic` segment config disappears. The `use-cache` branch of this repo shows the same app under that model.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -428,7 +451,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
 - A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
-- Next.js caching is decided per route and per fetch: `dynamic = "force-dynamic"` for live data, `next.revalidate` plus tags for cached data, `updateTag` in a Server Action to read your own writes.
+- Next.js caching is decided per route and per fetch: `dynamic` for the rendering mode, `revalidate` at the segment or the fetch, `generateStaticParams` for known paths, and three invalidation APIs: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
 Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, compare with the `use-cache` branch, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
 
