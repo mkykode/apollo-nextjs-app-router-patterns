@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-test("an unknown track id is a real 404 where dynamicParams is false", async ({ page }) => {
+test("an unknown track id renders not-found in place even on a cached, prerendered route", async ({
+  page,
+}) => {
   // Under Cache Components the prerendered shell is served with a 200 before anything runs,
-  // so /use-cache/track/[trackId] lists its ids with generateStaticParams and rejects the
-  // rest at the router with dynamicParams = false: a genuine 404 status.
+  // and dynamicParams is not available, so notFound() can only render in place.
   const response = await page.goto("/use-cache/track/does-not-exist");
-  expect(response?.status()).toBe(404);
+  expect(response?.status()).toBe(200);
   await expect(page.getByTestId("not-found")).toBeVisible();
 });
 

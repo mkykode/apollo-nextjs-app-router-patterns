@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
-import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
 import { getCachedTrack } from "@/lib/data/tracks";
 
@@ -18,24 +18,21 @@ export async function generateStaticParams() {
   return data.tracksForHome.map(({ id }) => ({ trackId: id }));
 }
 
-/**
- * Under Cache Components every dynamic route has a prerendered shell that is served with a
- * 200 before anything runs, so a data-driven notFound() can only render in place. For a
- * finite, known set of ids, `dynamicParams = false` is the way to a real 404: any id that
- * generateStaticParams did not return is rejected by the router before rendering.
- */
-export const dynamicParams = false;
+// `dynamicParams` is not available under Cache Components: ids that generateStaticParams did
+// not return render on request, the cached function answers null for the ones the API does
+// not know, and notFound() below renders the 404 UI in place (the shell already went out).
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;
-  const track = await getCachedTrack(trackId).catch(rethrowAsNotFound);
+  const track = await getCachedTrack(trackId);
+  if (!track) notFound();
   return { title: track.title };
 }
 
 export default async function CachedTrackPage({ params }: Props) {
   const { trackId } = await params;
-  // Still mapped, for the case where a listed track disappears from the API later.
-  const track = await getCachedTrack(trackId).catch(rethrowAsNotFound);
+  const track = await getCachedTrack(trackId);
+  if (!track) notFound();
 
   return (
     <PageContainer>
