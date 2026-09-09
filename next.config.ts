@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
   // prerendered static shell, and dynamic data streams in under Suspense boundaries.
   // Route segment configs such as `dynamic = "force-dynamic"` are errors in this mode.
   cacheComponents: true,
+  // A custom cacheLife profile, used by getCachedTrack. Built-in ones: seconds, minutes, hours,
+  // days, weeks, max. stale: how long the client may reuse it without asking; revalidate: how
+  // often the server refreshes in the background; expire: when a stale entry must block.
+  cacheLife: {
+    track: { stale: 60, revalidate: 60, expire: 3600 },
+  },
   typedRoutes: true,
   images: {
     remotePatterns: [

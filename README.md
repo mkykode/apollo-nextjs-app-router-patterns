@@ -6,7 +6,7 @@ By the end you will be able to:
 
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
-- decide per route what Next.js prerenders and what streams at request time, with `connection()`, `"use cache"`, `cacheLife`, `cacheTag`, and `updateTag`
+- use every caching lever of Cache Components on purpose: `"use cache"` on a function and on a page, built-in and custom `cacheLife` profiles, `cacheTag`, `generateStaticParams`, `connection()`, and the three invalidation APIs `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -166,6 +166,12 @@ const nextConfig: NextConfig = {
   // prerendered static shell, and dynamic data streams in under Suspense boundaries.
   // Route segment configs such as `dynamic = "force-dynamic"` are errors in this mode.
   cacheComponents: true,
+  // A custom cacheLife profile, used by getCachedTrack. Built-in ones: seconds, minutes, hours,
+  // days, weeks, max. stale: how long the client may reuse it without asking; revalidate: how
+  // often the server refreshes in the background; expire: when a stale entry must block.
+  cacheLife: {
+    track: { stale: 60, revalidate: 60, expire: 3600 },
+  },
   typedRoutes: true,
   images: {
     remotePatterns: [
@@ -245,6 +251,9 @@ export default eslintConfig;
 # .env.example
 # Optional. Defaults to the Odyssey Lift-off server when unset.
 # NEXT_PUBLIC_GRAPHQL_URI=https://odyssey-lift-off-server.herokuapp.com/
+
+# Required by POST /api/revalidate (on-demand revalidation). Any long random string.
+# REVALIDATE_SECRET=
 ```
 
 **Check:** `pnpm exec next --version` prints `Next.js 16.x`, and `pnpm lint` runs without complaining about the config.
@@ -877,10 +886,10 @@ Because there is no browser cache to update, the mutation runs in a Server Actio
 // src/lib/actions/increment-track-views.ts
 "use server";
 
-import { updateTag } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
+import { trackTag } from "@/lib/cache-tags";
 
 const TRACK_ID = /^[\w-]{1,64}$/;
 
@@ -902,15 +911,18 @@ export async function incrementTrackViews(trackId: string) {
 }
 
 /**
- * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
- * updateTag expires the tagged entries immediately, so the render triggered by this
- * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
- * instead serve the stale entry once more while refreshing in the background.
+ * Same mutation, for the /use-cache pattern, followed by both on-demand invalidation APIs:
+ * - updateTag expires the track's cached function result immediately, so the render
+ *   triggered by this click reads the new count (read-your-own-writes).
+ * - revalidatePath marks the cached list page for regeneration on its next request
+ *   (updateTag(TRACKS_TAG) would do the same through the page's cacheTag).
+ * revalidateTag(tag, "max") is the third option, used by /api/revalidate: serve the stale
+ * entry once more while refreshing in the background.
  */
 export async function incrementTrackViewsAndUpdateCache(trackId: string) {
   const result = await incrementTrackViews(trackId);
-  updateTag(TRACKS_TAG);
   updateTag(trackTag(trackId));
+  revalidatePath("/use-cache");
   return result;
 }
 ```
@@ -1407,7 +1419,46 @@ No layout here: nothing fetches on the server, so a fully static spinner shell i
 
 ## Step 12: Pattern 6: RSC and `"use cache"`
 
-Everything so far streams at request time. Cache Components let you cache at the function level instead of the fetch level: mark an async function `"use cache"`, give it a lifetime with `cacheLife`, and a name with `cacheTag`. The return value is memoized across requests, keyed by the arguments, and on a hit the function body, including the GraphQL request, does not run at all. Tags let a Server Action expire exactly the entries a mutation touched:
+Everything so far streams at request time. Cache Components cache at the function or component level: mark an async function or component `"use cache"`, give it a lifetime with `cacheLife`, and a name with `cacheTag`. The return value is memoized across requests, keyed by the arguments (or props), and on a hit the body, including the GraphQL request, does not run at all. This pattern uses each lever once so you can compare them.
+
+**Page-level `"use cache"` with a built-in profile.** The list page caches its own rendered output. `cacheLife("minutes")` is one of the built-in profiles (`seconds`, `minutes`, `hours`, `days`, `weeks`, `max`).
+
+```tsx
+// src/app/use-cache/page.tsx
+import { cacheLife, cacheTag } from "next/cache";
+import { GetTracksDocument } from "@/__generated__/graphql";
+import { PageContainer } from "@/components/page-container";
+import { TrackGrid } from "@/components/track-grid";
+import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
+import { query } from "@/lib/apollo/rsc-client";
+import { TRACKS_TAG } from "@/lib/cache-tags";
+
+/**
+ * Pattern 6 under Cache Components: RSC + "use cache" at the component level.
+ * The directive caches this page's rendered output (the JSX, with the Server Action reference
+ * inside it), so the whole route is part of the prerendered static shell and refreshes in the
+ * background per the built-in "minutes" profile. The detail page shows the function-level form.
+ */
+export default async function CachedTracksPage() {
+  "use cache";
+  cacheLife("minutes");
+  cacheTag(TRACKS_TAG);
+
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
+
+  return (
+    <PageContainer grid>
+      <TrackGrid
+        tracks={data.tracksForHome}
+        pattern="use-cache"
+        onOpenTrack={incrementTrackViewsAndUpdateCache}
+      />
+    </PageContainer>
+  );
+}
+```
+
+**Function-level `"use cache"` with a custom profile.** The detail data lives in a cached function tagged per track. `cacheLife("track")` is a profile declared in `next.config.ts`: `stale` is how long a client may reuse the value without asking, `revalidate` how often the server refreshes in the background, `expire` when a stale entry must block instead.
 
 ```ts
 // src/lib/cache-tags.ts
@@ -1421,33 +1472,24 @@ export const trackTag = (trackId: string) => `track:${trackId}`;
 // src/lib/data/tracks.ts
 import "server-only";
 import { cacheLife, cacheTag } from "next/cache";
-import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { GetTrackDocument } from "@/__generated__/graphql";
 import { query } from "@/lib/apollo/rsc-client";
-import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
+import { trackTag } from "@/lib/cache-tags";
 
 /**
- * Cached data access for the /use-cache pattern under Cache Components.
+ * Function-level "use cache" for the /use-cache detail page.
  *
- * "use cache" memoizes the function's return value, keyed by its arguments, across requests.
- * cacheLife("minutes") = fresh for 1 minute, served stale for up to 5 minutes while
- * revalidating, dropped after 1 hour. cacheTag names the entry so a Server Action can expire
- * it with updateTag. The Apollo client inside is still the per-request one; on a cache hit
- * this function does not run at all, so neither does the GraphQL request.
+ * The return value is memoized across requests, keyed by the arguments. cacheLife("track")
+ * is the custom profile from next.config.ts; cacheTag names the entry so a Server Action
+ * (updateTag) or the /api/revalidate route handler (revalidateTag) can expire exactly this
+ * track. On a hit this function does not run at all, so neither does the GraphQL request.
  *
  * Return values must be serializable: return `data`, never the client or a queryRef.
+ * The per-request Apollo client still works in here; React.cache just memoizes nothing.
  */
-export async function getCachedTracks() {
-  "use cache";
-  cacheLife("minutes");
-  cacheTag(TRACKS_TAG);
-
-  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
-  return data.tracksForHome;
-}
-
 export async function getCachedTrack(trackId: string) {
   "use cache";
-  cacheLife("minutes");
+  cacheLife("track");
   cacheTag(trackTag(trackId));
 
   const { data } = await query({
@@ -1459,40 +1501,28 @@ export async function getCachedTrack(trackId: string) {
 }
 ```
 
-The pages only call the cached functions. Because the data is cached, `/use-cache` is prerendered as fully static; `/use-cache/track/[trackId]` reads `params`, so its shell prerenders and the cached content streams in.
-
-```tsx
-// src/app/use-cache/page.tsx
-import { PageContainer } from "@/components/page-container";
-import { TrackGrid } from "@/components/track-grid";
-import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
-import { getCachedTracks } from "@/lib/data/tracks";
-
-/**
- * Pattern 6 under Cache Components: RSC + "use cache".
- * The data function is cached with cacheLife and tagged with cacheTag, so this page is part
- * of the prerendered static shell and refreshes in the background. A click runs a Server
- * Action that calls updateTag, so the next render is fresh.
- */
-export default async function CachedTracksPage() {
-  const tracks = await getCachedTracks();
-
-  return (
-    <PageContainer grid>
-      <TrackGrid tracks={tracks} pattern="use-cache" onOpenTrack={incrementTrackViewsAndUpdateCache} />
-    </PageContainer>
-  );
-}
-```
+The detail page also exports `generateStaticParams`, which runs the list query once at build. Combined with the cached function, every known track page is fully static; unknown ids render on first request.
 
 ```tsx
 // src/app/use-cache/track/[trackId]/page.tsx
 import type { Metadata } from "next";
+import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
+import { query } from "@/lib/apollo/rsc-client";
 import { getCachedTrack } from "@/lib/data/tracks";
 
 type Props = PageProps<"/use-cache/track/[trackId]">;
+
+/**
+ * Prerender a page per track at build time. generateStaticParams runs the list query once
+ * during `next build`; combined with the cached data function, every known track page is
+ * fully static. Ids not in the list render on first request (dynamicParams defaults to true).
+ */
+export async function generateStaticParams() {
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
+  return data.tracksForHome.map(({ id }) => ({ trackId: id }));
+}
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;
@@ -1512,16 +1542,16 @@ export default async function CachedTrackPage({ params }: Props) {
 }
 ```
 
-Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` is the read-your-own-writes tool: it expires the tag immediately, so the render caused by this click is fresh. `revalidateTag(tag, "max")` is the softer alternative: serve the stale entry once more and refresh in the background.
+**On demand, from inside the app.** Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` expires the track's entry immediately, so the render caused by this click is fresh (read-your-own-writes). `revalidatePath` regenerates the cached list page on its next request; `updateTag(TRACKS_TAG)` through the page's `cacheTag` would do the same.
 
 ```ts
 // src/lib/actions/increment-track-views.ts
 "use server";
 
-import { updateTag } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
+import { trackTag } from "@/lib/cache-tags";
 
 const TRACK_ID = /^[\w-]{1,64}$/;
 
@@ -1543,24 +1573,76 @@ export async function incrementTrackViews(trackId: string) {
 }
 
 /**
- * Same mutation, for routes that cache GraphQL responses in the Next.js Data Cache.
- * updateTag expires the tagged entries immediately, so the render triggered by this
- * click reads the new count (read-your-own-writes). revalidateTag(tag, "max") would
- * instead serve the stale entry once more while refreshing in the background.
+ * Same mutation, for the /use-cache pattern, followed by both on-demand invalidation APIs:
+ * - updateTag expires the track's cached function result immediately, so the render
+ *   triggered by this click reads the new count (read-your-own-writes).
+ * - revalidatePath marks the cached list page for regeneration on its next request
+ *   (updateTag(TRACKS_TAG) would do the same through the page's cacheTag).
+ * revalidateTag(tag, "max") is the third option, used by /api/revalidate: serve the stale
+ * entry once more while refreshing in the background.
  */
 export async function incrementTrackViewsAndUpdateCache(trackId: string) {
   const result = await incrementTrackViews(trackId);
-  updateTag(TRACKS_TAG);
   updateTag(trackTag(trackId));
+  revalidatePath("/use-cache");
   return result;
+}
+```
+
+**On demand, from outside the app.** A CMS or the GraphQL backend would call a webhook after data changes. This route handler is that webhook: `revalidateTag(tag, "max")` is stale-while-revalidate, so the next request still gets the cached entry while a fresh one is computed in the background. Next 16 requires the profile argument. Set `REVALIDATE_SECRET` in `.env.local` to enable it.
+
+```ts
+// src/app/api/revalidate/route.ts
+import { timingSafeEqual } from "node:crypto";
+import { revalidateTag } from "next/cache";
+import { type NextRequest, NextResponse } from "next/server";
+
+/** Only the tags this app creates: `track:<id>`. Anything else is rejected. */
+const TAG = /^track:[\w-]{1,64}$/;
+
+const isAuthorized = (given: string | null, expected: string) =>
+  given !== null &&
+  given.length === expected.length &&
+  timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+
+/**
+ * On-demand revalidation from outside the app, the way a CMS or the GraphQL backend would
+ * call a webhook after data changes: POST /api/revalidate?tag=track:c_1&secret=...
+ *
+ * revalidateTag with the "max" profile is stale-while-revalidate: the next request for a
+ * page using that tag still gets the cached entry while a fresh one is fetched in the
+ * background. Compare updateTag in the Server Action, which expires the entry so the very
+ * next render waits for fresh data. Next 16 requires the profile argument.
+ */
+export async function POST(request: NextRequest) {
+  const secret = process.env.REVALIDATE_SECRET;
+  if (!secret) {
+    return NextResponse.json({ error: "REVALIDATE_SECRET is not configured" }, { status: 503 });
+  }
+  if (!isAuthorized(request.nextUrl.searchParams.get("secret"), secret)) {
+    return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
+  }
+  const tag = request.nextUrl.searchParams.get("tag");
+  if (tag === null || !TAG.test(tag)) {
+    return NextResponse.json({ error: "Expected tag=track:<id>" }, { status: 400 });
+  }
+
+  revalidateTag(tag, "max");
+  return NextResponse.json({ revalidated: tag });
 }
 ```
 
 Register the pattern in `src/lib/patterns.ts` (slug `use-cache`) and the header, index page, and tests pick it up.
 
-Two rules from the docs that matter here: a `"use cache"` function cannot read `cookies()`, `headers()`, or `searchParams`, so read them outside and pass them as arguments; and `React.cache` cannot pass data into the scope, which is fine for `registerApolloClient` because it only memoizes the client, and a fresh one inside the scope makes the same request.
+Three rules from the docs that matter here: a `"use cache"` scope cannot read `cookies()`, `headers()`, or `searchParams`, so read them outside and pass them as arguments (`"use cache: private"` exists for the rare case where you cannot); return values must be serializable, which JSX and plain data are and an Apollo client or queryRef is not; and `React.cache` cannot pass data into the scope, which is fine for `registerApolloClient` because it only memoizes the client, and a fresh one inside the scope makes the same request.
 
-**Check:** open http://localhost:3000/use-cache/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/use-cache` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
+**Check:** open http://localhost:3000/use-cache/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: the cached function did not run. Now go to `/use-cache` and click the card. The detail page shows the fresh count: the Server Action expired the tag. Then, with `REVALIDATE_SECRET=test` in `.env.local` and the server restarted, increment again and run:
+
+```sh
+curl -s -X POST "http://localhost:3000/api/revalidate?tag=track:c_0&secret=test"
+```
+
+Reload the detail page twice: the first load may still be stale, the second is fresh. `e2e/data-cache.spec.ts` and `e2e/revalidate-route.spec.ts` automate both flows.
 
 ## Step 13: Errors and retry
 
@@ -1724,6 +1806,9 @@ loadEnvConfig(process.cwd());
 
 const PORT = 3000;
 
+/** Shared with e2e/revalidate-route.spec.ts; the server only accepts the secret it was started with. */
+export const REVALIDATE_SECRET = "e2e-only-secret";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -1738,8 +1823,10 @@ export default defineConfig({
   webServer: {
     command: `pnpm build && pnpm start -p ${PORT}`,
     url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
+    // Always build and start our own server: an existing one may lack REVALIDATE_SECRET.
+    reuseExistingServer: false,
     timeout: 180_000,
+    env: { REVALIDATE_SECRET },
   },
 });
 ```
@@ -1750,7 +1837,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 12 tests
+pnpm test:e2e         # builds, starts the server, 13 tests
 ```
 
 ## Step 15: Build and ship
@@ -1760,7 +1847,16 @@ pnpm build
 pnpm start
 ```
 
-Read the route table the build prints. `/`, `/legacy`, and `/use-cache` are `○ (Static)`: fully prerendered, and `/use-cache` shows its `cacheLife` window (revalidate 1m, expire 1h). Every other route is `◐ (Partial Prerender)`: the shell is static HTML and the data streams in at request time. Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"` and `/use-cache` uses `next.revalidate` on the fetch instead of `"use cache"`.
+Read the route table the build prints; every rendering mode of Cache Components is in it.
+
+| Symbol | Routes | Why |
+| --- | --- | --- |
+| `◐ (Partial Prerender)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/legacy/track/[trackId]` | The shell is static HTML; uncached data (or `params`) streams in at request time under `loading.tsx` |
+| `○ (Static)` | `/`, `/legacy` | Nothing reads request-time data or fetches on the server |
+| `○ (Static)` with `1m 1h` | `/use-cache`, `/use-cache/track/c_0` … | Page-level `"use cache"` with the `minutes` profile; `generateStaticParams` plus the cached function with the custom `track` profile |
+| `ƒ (Dynamic)` | `/api/revalidate` | Route handlers with `POST` are always dynamic |
+
+Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"`, `/revalidate` uses segment `revalidate` and fetch `next.revalidate` instead of `"use cache"`, and `dynamic = "force-static"` / `"error"` guard the static routes.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -1774,7 +1870,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
 - A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
-- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` and `cacheTag` cache a function across requests, `connection()` forces request-time rendering where Next.js cannot detect it, and `updateTag` in a Server Action reads your own writes.
+- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` (built-in or custom profile) and `cacheTag` cache a function or a page across requests, `generateStaticParams` prerenders known paths, `connection()` forces request-time rendering where Next.js cannot detect it, and three invalidation APIs exist: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
 Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, diff this branch against `dynamic` to see everything the rendering model changes, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
 

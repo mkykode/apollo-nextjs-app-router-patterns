@@ -6,7 +6,7 @@ By the end you will be able to:
 
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
-- decide per route what Next.js prerenders and what streams at request time, with `connection()`, `"use cache"`, `cacheLife`, `cacheTag`, and `updateTag`
+- use every caching lever of Cache Components on purpose: `"use cache"` on a function and on a page, built-in and custom `cacheLife` profiles, `cacheTag`, `generateStaticParams`, `connection()`, and the three invalidation APIs `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -352,27 +352,41 @@ No layout here: nothing fetches on the server, so a fully static spinner shell i
 
 ## Step 12: Pattern 6: RSC and `"use cache"`
 
-Everything so far streams at request time. Cache Components let you cache at the function level instead of the fetch level: mark an async function `"use cache"`, give it a lifetime with `cacheLife`, and a name with `cacheTag`. The return value is memoized across requests, keyed by the arguments, and on a hit the function body, including the GraphQL request, does not run at all. Tags let a Server Action expire exactly the entries a mutation touched:
+Everything so far streams at request time. Cache Components cache at the function or component level: mark an async function or component `"use cache"`, give it a lifetime with `cacheLife`, and a name with `cacheTag`. The return value is memoized across requests, keyed by the arguments (or props), and on a hit the body, including the GraphQL request, does not run at all. This pattern uses each lever once so you can compare them.
+
+**Page-level `"use cache"` with a built-in profile.** The list page caches its own rendered output. `cacheLife("minutes")` is one of the built-in profiles (`seconds`, `minutes`, `hours`, `days`, `weeks`, `max`).
+
+@@include(src/app/use-cache/page.tsx)@@
+
+**Function-level `"use cache"` with a custom profile.** The detail data lives in a cached function tagged per track. `cacheLife("track")` is a profile declared in `next.config.ts`: `stale` is how long a client may reuse the value without asking, `revalidate` how often the server refreshes in the background, `expire` when a stale entry must block instead.
 
 @@include(src/lib/cache-tags.ts)@@
 
 @@include(src/lib/data/tracks.ts)@@
 
-The pages only call the cached functions. Because the data is cached, `/use-cache` is prerendered as fully static; `/use-cache/track/[trackId]` reads `params`, so its shell prerenders and the cached content streams in.
-
-@@include(src/app/use-cache/page.tsx)@@
+The detail page also exports `generateStaticParams`, which runs the list query once at build. Combined with the cached function, every known track page is fully static; unknown ids render on first request.
 
 @@include(src/app/use-cache/track/[trackId]/page.tsx)@@
 
-Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` is the read-your-own-writes tool: it expires the tag immediately, so the render caused by this click is fresh. `revalidateTag(tag, "max")` is the softer alternative: serve the stale entry once more and refresh in the background.
+**On demand, from inside the app.** Add the second Server Action to `src/lib/actions/increment-track-views.ts`. `updateTag` expires the track's entry immediately, so the render caused by this click is fresh (read-your-own-writes). `revalidatePath` regenerates the cached list page on its next request; `updateTag(TRACKS_TAG)` through the page's `cacheTag` would do the same.
 
 @@include(src/lib/actions/increment-track-views.ts)@@
 
+**On demand, from outside the app.** A CMS or the GraphQL backend would call a webhook after data changes. This route handler is that webhook: `revalidateTag(tag, "max")` is stale-while-revalidate, so the next request still gets the cached entry while a fresh one is computed in the background. Next 16 requires the profile argument. Set `REVALIDATE_SECRET` in `.env.local` to enable it.
+
+@@include(src/app/api/revalidate/route.ts)@@
+
 Register the pattern in `src/lib/patterns.ts` (slug `use-cache`) and the header, index page, and tests pick it up.
 
-Two rules from the docs that matter here: a `"use cache"` function cannot read `cookies()`, `headers()`, or `searchParams`, so read them outside and pass them as arguments; and `React.cache` cannot pass data into the scope, which is fine for `registerApolloClient` because it only memoizes the client, and a fresh one inside the scope makes the same request.
+Three rules from the docs that matter here: a `"use cache"` scope cannot read `cookies()`, `headers()`, or `searchParams`, so read them outside and pass them as arguments (`"use cache: private"` exists for the rare case where you cannot); return values must be serializable, which JSX and plain data are and an Apollo client or queryRef is not; and `React.cache` cannot pass data into the scope, which is fine for `registerApolloClient` because it only memoizes the client, and a fresh one inside the scope makes the same request.
 
-**Check:** open http://localhost:3000/use-cache/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/use-cache` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
+**Check:** open http://localhost:3000/use-cache/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: the cached function did not run. Now go to `/use-cache` and click the card. The detail page shows the fresh count: the Server Action expired the tag. Then, with `REVALIDATE_SECRET=test` in `.env.local` and the server restarted, increment again and run:
+
+```sh
+curl -s -X POST "http://localhost:3000/api/revalidate?tag=track:c_0&secret=test"
+```
+
+Reload the detail page twice: the first load may still be stale, the second is fresh. `e2e/data-cache.spec.ts` and `e2e/revalidate-route.spec.ts` automate both flows.
 
 ## Step 13: Errors and retry
 
@@ -406,7 +420,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 12 tests
+pnpm test:e2e         # builds, starts the server, 13 tests
 ```
 
 ## Step 15: Build and ship
@@ -416,7 +430,16 @@ pnpm build
 pnpm start
 ```
 
-Read the route table the build prints. `/`, `/legacy`, and `/use-cache` are `○ (Static)`: fully prerendered, and `/use-cache` shows its `cacheLife` window (revalidate 1m, expire 1h). Every other route is `◐ (Partial Prerender)`: the shell is static HTML and the data streams in at request time. Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"` and `/use-cache` uses `next.revalidate` on the fetch instead of `"use cache"`.
+Read the route table the build prints; every rendering mode of Cache Components is in it.
+
+| Symbol | Routes | Why |
+| --- | --- | --- |
+| `◐ (Partial Prerender)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/legacy/track/[trackId]` | The shell is static HTML; uncached data (or `params`) streams in at request time under `loading.tsx` |
+| `○ (Static)` | `/`, `/legacy` | Nothing reads request-time data or fetches on the server |
+| `○ (Static)` with `1m 1h` | `/use-cache`, `/use-cache/track/c_0` … | Page-level `"use cache"` with the `minutes` profile; `generateStaticParams` plus the cached function with the custom `track` profile |
+| `ƒ (Dynamic)` | `/api/revalidate` | Route handlers with `POST` are always dynamic |
+
+Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"`, `/revalidate` uses segment `revalidate` and fetch `next.revalidate` instead of `"use cache"`, and `dynamic = "force-static"` / `"error"` guard the static routes.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -430,7 +453,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
 - A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
-- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` and `cacheTag` cache a function across requests, `connection()` forces request-time rendering where Next.js cannot detect it, and `updateTag` in a Server Action reads your own writes.
+- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` (built-in or custom profile) and `cacheTag` cache a function or a page across requests, `generateStaticParams` prerenders known paths, `connection()` forces request-time rendering where Next.js cannot detect it, and three invalidation APIs exist: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
 Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, diff this branch against `dynamic` to see everything the rendering model changes, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
 
