@@ -2147,6 +2147,119 @@ Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 **Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
 
+## Step 15: Effects: useLayoutEffect, useEffect, and no effect at all
+
+Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the two cases that do, and recognize the cases that do not.
+
+The header's pattern navigation gets a bar that slides under the active link. Positioning it means reading the DOM (`offsetLeft`, `offsetWidth`), which React cannot know during render.
+
+```tsx
+// src/components/pattern-nav.tsx
+"use client";
+
+import type { Route } from "next";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PATTERNS } from "@/lib/patterns";
+import styles from "./pattern-nav.module.css";
+
+/**
+ * Switch data-fetching pattern while staying on the same page:
+ * /rsc/track/c_0 -> /preload/track/c_0. Client Component because it reads the pathname.
+ *
+ * Under Cache Components the pathname is runtime data, so the header renders this inside a
+ * Suspense boundary with PatternNavLinks (no active state) as the prerendered fallback.
+ */
+export function PatternNav() {
+  return <PatternNavLinks pathname={usePathname()} />;
+}
+
+/** Where the sliding indicator sits, and which pathname it was measured for. */
+interface Indicator {
+  pathname: string;
+  left: number;
+  width: number;
+}
+
+export function PatternNavLinks({ pathname }: { pathname: string }) {
+  const active = PATTERNS.find(
+    ({ slug }) => pathname === `/${slug}` || pathname.startsWith(`/${slug}/`),
+  );
+  const rest = active ? pathname.slice(active.slug.length + 1) : "";
+
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState<Indicator | null>(null);
+
+  const measure = useCallback(() => {
+    const link = trackRef.current?.querySelector<HTMLAnchorElement>('a[aria-current="page"]');
+    setIndicator(link ? { pathname, left: link.offsetLeft, width: link.offsetWidth } : null);
+  }, [pathname]);
+
+  // useLayoutEffect: read the DOM and set state before the browser paints. The indicator is
+  // hidden until it has been measured for the current pathname, so with useEffect instead,
+  // every navigation would paint one frame without it (or at the old position) and blink.
+  useLayoutEffect(measure, [measure]);
+
+  // useEffect: subscribe to something outside React (the viewport) and clean up. Nothing
+  // here has to happen before paint, so the cheaper effect is the right one.
+  useEffect(() => {
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
+
+  const measured = indicator?.pathname === pathname;
+
+  return (
+    <nav aria-label="Data-fetching pattern">
+      <div ref={trackRef} className={styles.track}>
+        <ul className={styles.list}>
+          {PATTERNS.map((pattern) => (
+            <li key={pattern.slug}>
+              <Link
+                href={`/${pattern.slug}${rest}` as Route}
+                className={styles.link}
+                aria-current={pattern === active ? "page" : undefined}
+              >
+                {pattern.title}
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <span
+          aria-hidden="true"
+          data-testid="pattern-indicator"
+          data-measured={measured}
+          className={styles.indicator}
+          style={
+            indicator
+              ? { transform: `translateX(${indicator.left}px)`, width: indicator.width }
+              : undefined
+          }
+        />
+      </div>
+    </nav>
+  );
+}
+```
+
+**`useLayoutEffect`: read layout, set state, and never paint in between.** It runs after React commits the DOM but before the browser paints. The indicator is hidden until it has been measured for the current pathname, so measuring in a layout effect means the user never sees the unmeasured frame. Change it to `useEffect` and every navigation paints one frame with the bar hidden or at its old position, then a second frame with it moved: a blink. That is the whole rule: `useLayoutEffect` only when a DOM measurement has to change what is painted, because it blocks painting.
+
+**`useEffect`: subscribe to an external system, and clean up.** The resize listener re-measures when the viewport changes. Nothing about it has to happen before paint, so the non-blocking effect is correct, and the returned function removes the listener when the component unmounts or `measure` changes. Other legitimate uses: analytics pings, connecting to a socket, syncing with a third-party widget. Neither effect runs on the server; React 19 no longer warns about `useLayoutEffect` during SSR, it simply does nothing there, which is why the server HTML carries `data-measured="false"` and the indicator appears on hydration. Under Cache Components the static shell contains the prerendered fallback nav, so the bar appears once the real nav streams in and hydrates.
+
+**No effect: the cases that look like effects but are not.** Every one of these is already in the repo:
+
+| Temptation | Do this instead | In this repo |
+| --- | --- | --- |
+| Fetch data in `useEffect` after mount | Fetch during render with Suspense hooks, or in a Server Component | Every pattern page; nothing in `src/` fetches in an effect |
+| Compute derived state in an effect and store it | Compute it during render | `others` in `TrackPreview`, `active` in `PatternNav` |
+| React to a click or submit in an effect | Do the work in the handler | Both forms and `TrackCard` |
+| Reset state when a prop changes | Give the component a `key` so React remounts it | Add `key={trackId}` to a component that keeps per-track state |
+| Read an external store's value in an effect | `useSyncExternalStore` | The pattern to reach for if the resize listener ever needs the width as state |
+| Notify the parent from an effect | Call the callback in the handler that caused the change | `onOpen` in `TrackCard` |
+
+**Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation.
+
 ## Step 16: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
