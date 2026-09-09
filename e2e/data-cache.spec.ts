@@ -18,11 +18,11 @@ async function incrementViaApi(request: APIRequestContext) {
   });
 }
 
-test("/cached serves the Data Cache until a Server Action calls updateTag", async ({
+test("/use-cache serves the cached function until a Server Action calls updateTag", async ({
   page,
   request,
 }) => {
-  const path = `/cached/track/${TRACK.id}`;
+  const path = `/use-cache/track/${TRACK.id}`;
 
   // Fill the cache, change the source of truth behind its back, and read again: still cached.
   const cached = await renderedViews(request, path);
@@ -30,7 +30,7 @@ test("/cached serves the Data Cache until a Server Action calls updateTag", asyn
   expect(await renderedViews(request, path)).toBe(cached);
 
   // The Server Action increments once more and expires the tags: the render after it is fresh.
-  await page.goto("/cached");
+  await page.goto("/use-cache");
   await page.getByRole("link", { name: TRACK.title }).click();
   await expect(page).toHaveURL(path);
   await expect(page.getByText(VIEWS)).toBeVisible();

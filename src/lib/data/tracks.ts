@@ -5,7 +5,7 @@ import { query } from "@/lib/apollo/rsc-client";
 import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
 
 /**
- * Cached data access for the /cached pattern under Cache Components.
+ * Cached data access for the /use-cache pattern under Cache Components.
  *
  * "use cache" memoizes the function's return value, keyed by its arguments, across requests.
  * cacheLife("minutes") = fresh for 1 minute, served stale for up to 5 minutes while

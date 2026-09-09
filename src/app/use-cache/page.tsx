@@ -14,7 +14,7 @@ export default async function CachedTracksPage() {
 
   return (
     <PageContainer grid>
-      <TrackGrid tracks={tracks} pattern="cached" onOpenTrack={incrementTrackViewsAndUpdateCache} />
+      <TrackGrid tracks={tracks} pattern="use-cache" onOpenTrack={incrementTrackViewsAndUpdateCache} />
     </PageContainer>
   );
 }

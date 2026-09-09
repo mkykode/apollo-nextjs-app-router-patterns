@@ -3,7 +3,7 @@ import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
 import { getCachedTrack } from "@/lib/data/tracks";
 
-type Props = PageProps<"/cached/track/[trackId]">;
+type Props = PageProps<"/use-cache/track/[trackId]">;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;

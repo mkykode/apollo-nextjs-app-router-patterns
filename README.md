@@ -11,12 +11,12 @@ By the end you will be able to:
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
-**Starting point:** the finished course app on the `main` branch of this repo. **Finished result:** this `cache-components` branch, which runs the app under Next.js 16 Cache Components (`cacheComponents: true`). The `nextjs-app-router` branch is the same app under the classic rendering model with `export const dynamic`; the two cannot coexist in one app, so this tutorial marks every step where the models differ. Every step names the finished file so you can compare when stuck. **Time:** about three hours. **Prerequisites:** Node 24, pnpm 11, and the course itself.
+**Starting point:** the finished course app on the `course` branch of this repo. **Finished result:** this `use-cache` branch, which runs the app under Next.js 16 Cache Components (`cacheComponents: true`). The `dynamic` branch is the same app under the classic rendering model with `export const dynamic`; the two cannot coexist in one app, so this tutorial marks every step where the models differ. Every step names the finished file so you can compare when stuck. **Time:** about three hours. **Prerequisites:** Node 24, pnpm 11, and the course itself.
 
 Run the finished app any time:
 
 ```sh
-git checkout nextjs-app-router
+git checkout dynamic
 pnpm install
 pnpm dev          # http://localhost:3000
 pnpm test         # unit tests
@@ -49,7 +49,7 @@ Each step ends with a **Check**. Do the check before moving on.
 ## Step 1: Start from the course app
 
 ```sh
-git checkout main
+git checkout course
 git checkout -b my-app-router
 ```
 
@@ -535,7 +535,7 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
  * Caching is decided per route, not here. On the server, HttpLink hands `fetchOptions` to
  * Next.js's patched fetch, so Next-only options apply: a route can pass
  * `context: { fetchOptions: { next: { revalidate, tags } } }` to store a response in the
- * Data Cache (see /cached), or export `dynamic = "force-dynamic"` to render per request
+ * Data Cache (see /use-cache), or export `dynamic = "force-dynamic"` to render per request
  * (see the layout.tsx of /rsc). Without either, Next.js fetches once at build time.
  */
 export const { getClient, query, PreloadQuery } = registerApolloClient(
@@ -606,7 +606,7 @@ export type PatternSlug =
   | "preload"
   | "background"
   | "legacy"
-  | "cached";
+  | "use-cache";
 
 export interface Pattern {
   slug: PatternSlug;
@@ -664,8 +664,8 @@ export const PATTERNS: readonly Pattern[] = [
       "The way the Odyssey course does it. useQuery does not suspend, so SSR renders the spinner and the data is fetched only in the browser.",
   },
   {
-    slug: "cached",
-    title: "RSC + Data Cache",
+    slug: "use-cache",
+    title: "RSC + use cache",
     fetchedBy: "Server Component",
     shipsDataInHtml: true,
     summary:
@@ -1401,7 +1401,7 @@ Everything so far streams at request time. Cache Components let you cache at the
 
 ```ts
 // src/lib/cache-tags.ts
-/** Next.js Data Cache tags used by the /cached pattern and its Server Action. */
+/** Next.js Data Cache tags used by the /use-cache pattern and its Server Action. */
 export const TRACKS_TAG = "tracks";
 
 export const trackTag = (trackId: string) => `track:${trackId}`;
@@ -1416,7 +1416,7 @@ import { query } from "@/lib/apollo/rsc-client";
 import { TRACKS_TAG, trackTag } from "@/lib/cache-tags";
 
 /**
- * Cached data access for the /cached pattern under Cache Components.
+ * Cached data access for the /use-cache pattern under Cache Components.
  *
  * "use cache" memoizes the function's return value, keyed by its arguments, across requests.
  * cacheLife("minutes") = fresh for 1 minute, served stale for up to 5 minutes while
@@ -1449,10 +1449,10 @@ export async function getCachedTrack(trackId: string) {
 }
 ```
 
-The pages only call the cached functions. Because the data is cached, `/cached` is prerendered as fully static; `/cached/track/[trackId]` reads `params`, so its shell prerenders and the cached content streams in.
+The pages only call the cached functions. Because the data is cached, `/use-cache` is prerendered as fully static; `/use-cache/track/[trackId]` reads `params`, so its shell prerenders and the cached content streams in.
 
 ```tsx
-// src/app/cached/page.tsx
+// src/app/use-cache/page.tsx
 import { PageContainer } from "@/components/page-container";
 import { TrackGrid } from "@/components/track-grid";
 import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
@@ -1469,20 +1469,20 @@ export default async function CachedTracksPage() {
 
   return (
     <PageContainer grid>
-      <TrackGrid tracks={tracks} pattern="cached" onOpenTrack={incrementTrackViewsAndUpdateCache} />
+      <TrackGrid tracks={tracks} pattern="use-cache" onOpenTrack={incrementTrackViewsAndUpdateCache} />
     </PageContainer>
   );
 }
 ```
 
 ```tsx
-// src/app/cached/track/[trackId]/page.tsx
+// src/app/use-cache/track/[trackId]/page.tsx
 import type { Metadata } from "next";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
 import { getCachedTrack } from "@/lib/data/tracks";
 
-type Props = PageProps<"/cached/track/[trackId]">;
+type Props = PageProps<"/use-cache/track/[trackId]">;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { trackId } = await params;
@@ -1546,11 +1546,11 @@ export async function incrementTrackViewsAndUpdateCache(trackId: string) {
 }
 ```
 
-Register the pattern in `src/lib/patterns.ts` (slug `cached`) and the header, index page, and tests pick it up.
+Register the pattern in `src/lib/patterns.ts` (slug `use-cache`) and the header, index page, and tests pick it up.
 
 Two rules from the docs that matter here: a `"use cache"` function cannot read `cookies()`, `headers()`, or `searchParams`, so read them outside and pass them as arguments; and `React.cache` cannot pass data into the scope, which is fine for `registerApolloClient` because it only memoizes the client, and a fresh one inside the scope makes the same request.
 
-**Check:** open http://localhost:3000/cached/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/cached` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
+**Check:** open http://localhost:3000/use-cache/track/c_0 twice, incrementing the count between the two loads with the `curl` from Step 9. The second load still shows the old count: it came from the Data Cache. Now go to `/use-cache` and click the card. The detail page shows the fresh count: the Server Action expired the tag. `e2e/data-cache.spec.ts` automates exactly this.
 
 ## Step 13: Errors and retry
 
@@ -1750,7 +1750,7 @@ pnpm build
 pnpm start
 ```
 
-Read the route table the build prints. `/`, `/legacy`, and `/cached` are `○ (Static)`: fully prerendered, and `/cached` shows its `cacheLife` window (revalidate 1m, expire 1h). Every other route is `◐ (Partial Prerender)`: the shell is static HTML and the data streams in at request time. Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `nextjs-app-router` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"` and `/cached` uses `next.revalidate` on the fetch instead of `"use cache"`.
+Read the route table the build prints. `/`, `/legacy`, and `/use-cache` are `○ (Static)`: fully prerendered, and `/use-cache` shows its `cacheLife` window (revalidate 1m, expire 1h). Every other route is `◐ (Partial Prerender)`: the shell is static HTML and the data streams in at request time. Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"` and `/use-cache` uses `next.revalidate` on the fetch instead of `"use cache"`.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -1766,6 +1766,6 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
 - Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` and `cacheTag` cache a function across requests, `connection()` forces request-time rendering where Next.js cannot detect it, and `updateTag` in a Server Action reads your own writes.
 
-Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, diff this branch against `nextjs-app-router` to see everything the rendering model changes, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
+Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, diff this branch against `dynamic` to see everything the rendering model changes, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
 
 The README is generated from `docs/tutorial.template.md` by `pnpm docs:readme`, which inlines the source files. Edit the template or the code, then regenerate; do not edit README.md by hand.

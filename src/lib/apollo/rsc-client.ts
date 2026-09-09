@@ -22,7 +22,7 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
  * Caching is decided per route, not here. On the server, HttpLink hands `fetchOptions` to
  * Next.js's patched fetch, so Next-only options apply: a route can pass
  * `context: { fetchOptions: { next: { revalidate, tags } } }` to store a response in the
- * Data Cache (see /cached), or export `dynamic = "force-dynamic"` to render per request
+ * Data Cache (see /use-cache), or export `dynamic = "force-dynamic"` to render per request
  * (see the layout.tsx of /rsc). Without either, Next.js fetches once at build time.
  */
 export const { getClient, query, PreloadQuery } = registerApolloClient(
