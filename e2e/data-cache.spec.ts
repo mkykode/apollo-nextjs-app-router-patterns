@@ -12,6 +12,21 @@ async function renderedViews(request: APIRequestContext, path: string) {
   return Number.parseInt(match[1], 10);
 }
 
+/**
+ * The cache is stale-while-revalidate: a stale entry left by an earlier run is served once and
+ * refreshed in the background. Read until two consecutive responses agree, which means the
+ * entry is fresh and will be served unchanged for the rest of its revalidate window.
+ */
+async function stableViews(request: APIRequestContext, path: string) {
+  let previous = await renderedViews(request, path);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await renderedViews(request, path);
+    if (current === previous) return current;
+    previous = current;
+  }
+  throw new Error(`${path} never settled on a cached view count`);
+}
+
 async function incrementViaApi(request: APIRequestContext) {
   await request.post(GRAPHQL_URI, {
     data: { query: `mutation { incrementTrackViews(id: "${TRACK.id}") { success } }` },
@@ -25,7 +40,7 @@ test("/revalidate serves the Data Cache until a Server Action calls updateTag", 
   const path = `/revalidate/track/${TRACK.id}`;
 
   // Fill the cache, change the source of truth behind its back, and read again: still cached.
-  const cached = await renderedViews(request, path);
+  const cached = await stableViews(request, path);
   await incrementViaApi(request);
   expect(await renderedViews(request, path)).toBe(cached);
 
