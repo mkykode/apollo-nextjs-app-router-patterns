@@ -4,7 +4,8 @@ import { defineConfig, devices } from "@playwright/test";
 // Same .env resolution as Next.js, so the tests target the endpoint the app talks to.
 loadEnvConfig(process.cwd());
 
-const PORT = 3000;
+/** Override with E2E_PORT when something else (a dev server) holds 3000. */
+const PORT = Number(process.env.E2E_PORT ?? 3000);
 
 /** Shared with e2e/revalidate-route.spec.ts; the server only accepts the secret it was started with. */
 export const REVALIDATE_SECRET = "e2e-only-secret";

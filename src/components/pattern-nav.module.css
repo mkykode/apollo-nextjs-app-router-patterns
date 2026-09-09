@@ -27,3 +27,32 @@
   background-color: var(--pink-base);
   color: white;
 }
+
+/* The offsetParent for the links, so offsetLeft is relative to the nav. */
+.track {
+  position: relative;
+}
+
+.indicator {
+  position: absolute;
+  left: 0;
+  bottom: -5px;
+  height: 3px;
+  width: 0;
+  border-radius: 2px;
+  background-color: var(--pink-base);
+  pointer-events: none;
+  transition:
+    transform 200ms ease,
+    width 200ms ease;
+}
+
+.indicator[data-measured="false"] {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indicator {
+    transition: none;
+  }
+}

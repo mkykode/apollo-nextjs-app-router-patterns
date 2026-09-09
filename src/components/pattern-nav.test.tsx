@@ -33,3 +33,20 @@ describe("PatternNav", () => {
     expect(screen.getByRole("link", { current: "page" })).toHaveTextContent("RSC query()");
   });
 });
+
+describe("PatternNav indicator", () => {
+  it("is measured for the active pattern before the first paint", () => {
+    usePathname.mockReturnValue("/preload/track/c_0");
+    render(<PatternNav />);
+
+    // useLayoutEffect ran synchronously inside render's act(): no unmeasured frame exists.
+    expect(screen.getByTestId("pattern-indicator")).toHaveAttribute("data-measured", "true");
+  });
+
+  it("stays hidden when no pattern is active", () => {
+    usePathname.mockReturnValue("/");
+    render(<PatternNav />);
+
+    expect(screen.getByTestId("pattern-indicator")).toHaveAttribute("data-measured", "false");
+  });
+});
