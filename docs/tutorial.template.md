@@ -14,7 +14,7 @@ By the end you will be able to:
 - add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
-- tell the three cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, and no effect for everything else
+- tell the cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, `useEffectEvent` for the latest state inside a subscription, and no effect for everything else
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
@@ -577,9 +577,9 @@ Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 **Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
 
-## Step: Effects: useLayoutEffect, useEffect, and no effect at all
+## Step: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
-Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the two cases that do, and recognize the cases that do not.
+Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the cases that do, keep the reactive part of an effect apart from the part that only needs the latest values, and recognize the cases that do not need an effect at all.
 
 The header's pattern navigation gets a bar that slides under the active link. Positioning it means reading the DOM (`offsetLeft`, `offsetWidth`), which React cannot know during render.
 
@@ -587,7 +587,11 @@ The header's pattern navigation gets a bar that slides under the active link. Po
 
 **`useLayoutEffect`: read layout, set state, and never paint in between.** It runs after React commits the DOM but before the browser paints. The indicator is hidden until it has been measured for the current pathname, so measuring in a layout effect means the user never sees the unmeasured frame. Change it to `useEffect` and every navigation paints one frame with the bar hidden or at its old position, then a second frame with it moved: a blink. That is the whole rule: `useLayoutEffect` only when a DOM measurement has to change what is painted, because it blocks painting.
 
-**`useEffect`: subscribe to an external system, and clean up.** The resize listener re-measures when the viewport changes. Nothing about it has to happen before paint, so the non-blocking effect is correct, and the returned function removes the listener when the component unmounts or `measure` changes. Other legitimate uses: analytics pings, connecting to a socket, syncing with a third-party widget. Neither effect runs on the server; React 19 no longer warns about `useLayoutEffect` during SSR, it simply does nothing there, which is why the server HTML carries `data-measured="false"` and the indicator appears on hydration.
+**`useEffect`: subscribe to an external system, and clean up.** The resize listener re-measures when the viewport changes. Nothing about it has to happen before paint, so the non-blocking effect is correct, and the returned function removes the listener when the component unmounts. Other legitimate uses: analytics pings, connecting to a socket, syncing with a third-party widget. Neither effect runs on the server; React 19 no longer warns about `useLayoutEffect` during SSR, it simply does nothing there, which is why the server HTML carries `data-measured="false"` and the indicator appears on hydration.
+
+**`useEffectEvent`: the latest values inside an effect, without re-running it.** The listeners need `measure`, and `measure` changes with the pathname. Put it in the dependency array and every navigation removes and re-adds both listeners: busywork here, a reconnect if the external system were a socket or a third-party widget. Leave it out and the handler keeps the `measure` from the first render, so a resize after navigating measures the wrong link. Neither is what you mean. The subscription belongs to the component's lifetime; only the handler's logic is reactive. `useEffectEvent` (stable since React 19.2) wraps `measure` in a function that always calls the latest version and is not a dependency, so the effect runs once and still measures the pathname that is current when the event fires. Three rules: call an Effect Event only from inside an effect (calling it during render throws), never pass it to a child or another hook, and keep the values that should re-run the effect as ordinary dependencies. `src/components/pattern-nav.test.tsx` pins both halves: one `resize` subscription across a navigation, and a resize after it measuring the new pathname.
+
+Not every "latest value" problem is an Effect Event. `src/lib/hooks/use-debounced-callback.ts` also keeps the latest callback, but it is called from an event handler and a timer, never from an effect, so it holds the callback in a ref that an effect updates. That is the older pattern, and outside effects it is still the right one.
 
 **No effect: the cases that look like effects but are not.** Every one of these is already in the repo:
 
@@ -600,7 +604,7 @@ The header's pattern navigation gets a bar that slides under the active link. Po
 | Read an external store's value in an effect | `useSyncExternalStore` | The pattern to reach for if the resize listener ever needs the width as state |
 | Notify the parent from an effect | Call the callback in the handler that caused the change | `onOpen` in `TrackCard` |
 
-**Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation.
+**Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation. In the Chrome console, `getEventListeners(window).resize.length` stays at 1 while you navigate between patterns; put `measure` back in the dependency array and watch it get removed and re-added on every click.
 
 ## Step: Apollo local state: reactive variables and client fields
 
@@ -753,7 +757,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 25 files, 84 tests
+pnpm vitest run       # 25 files, 85 tests
 pnpm test:e2e         # builds, starts the server, 36 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
