@@ -10,6 +10,9 @@ const PORT = Number(process.env.E2E_PORT ?? 3000);
 /** Shared with e2e/revalidate-route.spec.ts; the server only accepts the secret it was started with. */
 export const REVALIDATE_SECRET = "e2e-only-secret";
 
+/** Signs the session cookie of the server under test; `next start` does not load .env.development. */
+const AUTH_SECRET = "e2e-only-auth-secret";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -24,9 +27,9 @@ export default defineConfig({
   webServer: {
     command: `pnpm build && pnpm start -p ${PORT}`,
     url: `http://localhost:${PORT}`,
-    // Always build and start our own server: an existing one may lack REVALIDATE_SECRET.
+    // Always build and start our own server: an existing one may lack these secrets.
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { REVALIDATE_SECRET },
+    env: { REVALIDATE_SECRET, AUTH_SECRET },
   },
 });

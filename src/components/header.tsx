@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import logo from "@/assets/space_cat_logo.png";
+import { ACCOUNT_PATH } from "@/lib/auth/paths";
 import { FavoritesCount } from "./favorites-count";
 import { PatternNav } from "./pattern-nav";
 import styles from "./header.module.css";
@@ -30,6 +31,10 @@ export function Header() {
         </div>
         <PatternNav />
         <FavoritesCount />
+        {/* A plain link: reading the session here would make every route dynamic. */}
+        <Link href={ACCOUNT_PATH} className={styles.account}>
+          Account
+        </Link>
       </div>
     </header>
   );

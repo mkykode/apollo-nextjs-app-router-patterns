@@ -5,10 +5,12 @@ import { MoreTracks } from "@/components/more-tracks";
 import { PageContainer } from "@/components/page-container";
 import { QuickViewButton } from "@/components/quick-view-button";
 import { RegisterViewForm } from "@/components/register-view-form";
+import { SignInPrompt } from "@/components/sign-in-prompt";
 import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons";
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
+import { auth } from "@/lib/auth/auth";
 import { trackHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
@@ -50,13 +52,22 @@ export default async function RscTrackPage({ params }: Props) {
   );
 }
 
+/**
+ * The session is read next to the data, inside the boundary, so the request-time cookie read
+ * never blocks the shell. Signed out, the form gives way to a sign-in link; the action would
+ * refuse anyway, so this is a courtesy, not the check.
+ */
 async function TrackSection({ trackId }: { trackId: string }) {
-  const { data } = await getTrack(trackId);
+  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
   return (
     <>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
+      {session?.user ? (
+        <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
+      ) : (
+        <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />
+      )}
     </>
   );
 }

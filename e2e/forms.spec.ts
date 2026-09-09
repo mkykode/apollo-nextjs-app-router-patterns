@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { GRAPHQL_URI } from "../src/lib/graphql-uri";
+import { signIn } from "./helpers/auth";
 
 const GRAPHQL_HOST = new URL(GRAPHQL_URI).host;
 const VIEWS = /(\d+) view\(s\)/;
@@ -7,10 +8,21 @@ const parse = (text: string | null) => Number.parseInt(VIEWS.exec(text ?? "")?.[
 
 // Tracks no other spec opens, so parallel workers cannot change these counts.
 
-test("Server Action form: validated in the browser, run and re-rendered on the server", async ({
+test("signed out, the Server Action form gives way to a sign-in link that comes back here", async ({
   page,
 }) => {
   await page.goto("/rsc/track/c_3");
+  await expect(page.getByTestId("sign-in-prompt")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Register views", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Sign in to register views" }).click();
+  await expect(page).toHaveURL("/login?callbackUrl=%2Frsc%2Ftrack%2Fc_3");
+});
+
+test("Server Action form: validated in the browser, run and re-rendered on the server", async ({
+  page,
+}) => {
+  await signIn(page, "/rsc/track/c_3");
   const views = page.getByText(VIEWS).first();
   const before = parse(await views.textContent());
   const field = page.getByLabel("Views to register");
@@ -73,7 +85,7 @@ test("Client form: validated in the browser, useMutation updates every reader of
 test("useOptimistic shows the expected count while the Server Action is pending", async ({
   page,
 }) => {
-  await page.goto("/rsc/track/c_6");
+  await signIn(page, "/rsc/track/c_6");
   const detailViews = page.getByText(VIEWS).first();
   const optimistic = page.getByTestId("optimistic-views");
   const before = parse(await detailViews.textContent());

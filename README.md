@@ -11,6 +11,7 @@ By the end you will be able to:
 - keep search and pagination in the URL so the server can read them, and know when component state with `useDeferredValue` is the better fit
 - stream independent sections behind content-shaped skeletons, scope `loading.tsx` with a route group, and turn an API miss into a real 404
 - compose an Apollo link chain (error, retry, auth headers) and manage local state with reactive variables and `@client` fields
+- add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
 - tell the three cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, and no effect for everything else
@@ -62,11 +63,12 @@ The reference material (pattern table, architecture diagram, interview talking p
 17. [Effects: useLayoutEffect, useEffect, and no effect at all](#step-17-effects-uselayouteffect-useeffect-and-no-effect-at-all)
 18. [Apollo local state: reactive variables and client fields](#step-18-apollo-local-state-reactive-variables-and-client-fields)
 19. [The link chain](#step-19-the-link-chain)
-20. [Metadata: file conventions and Open Graph images](#step-20-metadata-file-conventions-and-open-graph-images)
-21. [Errors and retry](#step-21-errors-and-retry)
-22. [Tests](#step-22-tests)
-23. [Build and ship](#step-23-build-and-ship)
-24. [What you learned](#what-you-learned)
+20. [Authentication: Auth.js, the proxy, and the session in Server Actions](#step-20-authentication-authjs-the-proxy-and-the-session-in-server-actions)
+21. [Metadata: file conventions and Open Graph images](#step-21-metadata-file-conventions-and-open-graph-images)
+22. [Errors and retry](#step-22-errors-and-retry)
+23. [Tests](#step-23-tests)
+24. [Build and ship](#step-24-build-and-ship)
+25. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -120,6 +122,7 @@ Replace the dependency blocks in `package.json`. The versions here are the ones 
     "@graphql-typed-document-node/core": "^3.2.0",
     "graphql": "^17.0.2",
     "next": "16.3.4",
+    "next-auth": "5.0.0-beta.32",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
@@ -262,6 +265,10 @@ export default eslintConfig;
 
 # Absolute origin used for Open Graph and other metadata URLs (metadataBase).
 # NEXT_PUBLIC_SITE_URL=https://example.com
+
+# Required by Auth.js to sign the session cookie. Generate one: `npx auth secret` or
+# `openssl rand -base64 32`. .env.development carries a development-only value.
+# AUTH_SECRET=
 ```
 
 **Check:** `pnpm exec next --version` prints `Next.js 16.x`, and `pnpm lint` runs without complaining about the config.
@@ -1989,10 +1996,12 @@ import { MoreTracks } from "@/components/more-tracks";
 import { PageContainer } from "@/components/page-container";
 import { QuickViewButton } from "@/components/quick-view-button";
 import { RegisterViewForm } from "@/components/register-view-form";
+import { SignInPrompt } from "@/components/sign-in-prompt";
 import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons";
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
+import { auth } from "@/lib/auth/auth";
 import { trackHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
@@ -2034,13 +2043,22 @@ export default async function RscTrackPage({ params }: Props) {
   );
 }
 
+/**
+ * The session is read next to the data, inside the boundary, so the request-time cookie read
+ * never blocks the shell. Signed out, the form gives way to a sign-in link; the action would
+ * refuse anyway, so this is a courtesy, not the check.
+ */
 async function TrackSection({ trackId }: { trackId: string }) {
-  const { data } = await getTrack(trackId);
+  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
   return (
     <>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
+      {session?.user ? (
+        <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
+      ) : (
+        <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />
+      )}
     </>
   );
 }
@@ -2238,7 +2256,7 @@ export function parseRegisterView(formData: FormData) {
 
 The same function runs in the browser before a submit and on the server inside the action or, for the client form, next to the GraphQL server's own validation. `FormData` values are strings, which is what `z.coerce` is for.
 
-**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip.
+**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip. The session check and the `context` on the mutation come from Step 20; ignore them until then.
 
 ```ts
 // src/lib/actions/register-view.ts
@@ -2247,6 +2265,7 @@ The same function runs in the browser before a submit and on the server inside t
 import { revalidatePath } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
+import { auth } from "@/lib/auth/auth";
 import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
 
 /** Returned to useActionState; must be serializable. */
@@ -2261,8 +2280,14 @@ export type RegisterViewState =
  * useActionState expects. The browser posts the form, Next.js calls this with the FormData,
  * and the mutation runs on the server with the RSC client.
  *
- * Validation runs here even though the form validated in the browser: every "use server"
- * export is a public endpoint. Errors are returned, not thrown, so the form can show them.
+ * Validation and the session check run here even though the page validated and hid the form:
+ * every "use server" export is a public endpoint. Errors are returned, not thrown, so the
+ * form can show them.
+ *
+ * The session's token travels as per-operation context rather than through the link chain's
+ * getToken: auth() reads cookies, and a link that read cookies on every operation would break
+ * the cached and static routes that share the RSC client. The SetContextLink merges these
+ * headers with its own.
  *
  * revalidatePath is what makes the page update: an action that revalidates nothing returns
  * only its value and Next.js does not re-render the route. With it, the action response
@@ -2277,13 +2302,21 @@ export async function registerView(
     return { status: "invalid", fieldErrors };
   }
 
+  const session = await auth();
+  if (!session?.user) {
+    return { status: "failed", message: "Sign in to register views" };
+  }
+
   const { trackId, views } = data;
+  // One client for the whole action: outside a React render, every getClient() call is a new instance.
+  const client = getClient();
   let numberOfViews = 0;
   try {
     for (let registered = 0; registered < views; registered += 1) {
-      const result = await getClient().mutate({
+      const result = await client.mutate({
         mutation: IncrementTrackViewsDocument,
         variables: { trackId },
+        context: { headers: { authorization: `Bearer ${session.accessToken}` } },
       });
       numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
     }
@@ -3037,12 +3070,650 @@ export function createLinkChain({ uri, headers, fetchOptions, getToken }: LinkCh
 
 - `ErrorLink` observes every failure without swallowing it; the hook or the awaiting caller still receives the error.
 - `RetryLink` re-sends transient failures with exponential backoff and jitter. `shouldRetry` is the interesting part: never a mutation (not idempotent), never a GraphQL error (deterministic), never a 4xx (the client's fault).
-- `SetContextLink` sets headers per operation. This is where a session token goes: the RSC client would resolve it per request from `cookies()`, the browser client from a cookie-backed session. The browser client sets no custom headers otherwise, because each one would need CORS approval from the API.
+- `SetContextLink` sets headers per operation, merging whatever the operation's own `context.headers` carries. This is where a session token goes. The `getToken` slot suits a browser client with a token in memory; the RSC client cannot use it, because reading cookies inside a link would drag every cached and static route that shares the client into dynamic rendering. The Server Action in Step 20 passes the token per operation instead. The browser client sets no custom headers otherwise, because each one would need CORS approval from the API.
 - `HttpLink` performs the request and must be last.
 
 **Check:** open http://localhost:3000/suspense with DevTools offline, then go back online and reload: the console shows the ErrorLink entries and the request succeeds on a retry. `src/lib/apollo/links.test.ts` pins the retry policy.
 
-## Step 20: Metadata: file conventions and Open Graph images
+## Step 20: Authentication: Auth.js, the proxy, and the session in Server Actions
+
+The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: an Auth.js credentials provider, a session in an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and its token handed to Apollo per operation. Swap the demo user table for a database and the upstream for an API that checks bearer tokens, and the shape does not change.
+
+Install Auth.js v5 (`pnpm add next-auth@beta`). It signs the cookie with `AUTH_SECRET`: `.env.development` carries a development-only value that `next dev` loads, and production sets its own (`npx auth secret`). If the secret is missing, `auth()` logs `MissingSecret` and returns `null`. It fails closed, so a misconfigured app locks everyone out rather than in.
+
+**The user table and the schema.** One demo account, public because the login page prints it. The server never compares plaintext: it keeps a salted scrypt hash from Node's standard library, verifies it in constant time, and hands back a DTO without the hash. `server-only` keeps the module out of every client bundle.
+
+```ts
+// src/lib/auth/demo-account.ts
+/**
+ * The one account the demo knows. It is public on purpose: the login page prints it and the
+ * end-to-end tests sign in with it. The server never compares against this plaintext; it keeps
+ * a salted hash in users.ts, as a real user table would.
+ */
+export const DEMO_ACCOUNT = {
+  name: "Cadet Kitty",
+  email: "cadet@catstronauts.dev",
+  password: "space-cat",
+} as const;
+```
+
+```ts
+// src/lib/auth/users.ts
+import "server-only";
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { DEMO_ACCOUNT } from "./demo-account";
+
+/** What the rest of the app may see of a user: a DTO with no password material. */
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface UserRecord extends User {
+  /** `scrypt$<salt hex>$<key hex>`, produced by hashPassword. */
+  passwordHash: string;
+}
+
+/**
+ * The users "table". A real app queries a database; the shape of the code stays the same:
+ * find the record, verify the password against its salted hash, hand back a DTO without the
+ * hash. The whole module is server-only, so the hash can never end up in a client bundle.
+ */
+const USERS: readonly UserRecord[] = [
+  {
+    id: "cadet-1",
+    name: DEMO_ACCOUNT.name,
+    email: DEMO_ACCOUNT.email,
+    passwordHash: "scrypt$e397c33c378796c01cd8588efab3f973$afd1795acac132d5ec71fb56e5606c227cba2d6c150514688721ec74dbbb67204f9367a4f9c1908b60aff91900378b6f0dd518f6f8465bf2c0a8ee16dbc162ee",
+  },
+];
+
+const KEY_LENGTH = 64;
+
+/** scrypt is in Node's standard library: no bcrypt dependency, no native build. */
+export function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
+  return `scrypt$${salt}$${scryptSync(password, salt, KEY_LENGTH).toString("hex")}`;
+}
+
+/** Constant-time comparison, so response timing does not reveal how many bytes matched. */
+export function verifyPassword(password: string, stored: string) {
+  const [algorithm, salt, keyHex] = stored.split("$");
+  if (algorithm !== "scrypt" || !salt || !keyHex) return false;
+  const expected = Buffer.from(keyHex, "hex");
+  const actual = scryptSync(password, salt, expected.length);
+  return timingSafeEqual(actual, expected);
+}
+
+export function findUserByEmail(email: string) {
+  const wanted = email.trim().toLowerCase();
+  return USERS.find((user) => user.email.toLowerCase() === wanted);
+}
+
+/** Strip everything a session must not carry. */
+export function toUser({ id, name, email }: UserRecord): User {
+  return { id, name, email };
+}
+```
+
+The login schema works like the register-view one: run in the browser before the submit, again in the Server Action, and once more in the provider. A `redirectTo` that is not a relative path is dropped rather than reported, because a fresh session must never follow an absolute URL to another site.
+
+```ts
+// src/lib/schemas/login.ts
+import { z } from "zod";
+import { isRedirectPath } from "@/lib/auth/paths";
+
+/** What the credentials provider verifies. */
+export const credentialsSchema = z.object({
+  email: z.email({ error: "Enter a valid email address" }),
+  password: z.string().min(1, "Enter your password"),
+});
+
+/**
+ * What the login form posts. Validated in the browser before the submit and again in the
+ * Server Action, like the register-view form. A tampered redirectTo is dropped rather than
+ * reported: the user cannot fix it, and the fallback (the account page) is always fine.
+ */
+export const loginSchema = credentialsSchema.extend({
+  redirectTo: z
+    .string()
+    .refine(isRedirectPath, "Must be a relative path")
+    .optional()
+    .catch(undefined),
+});
+
+export type LoginInput = z.infer<typeof loginSchema>;
+export type LoginFieldErrors = Partial<Record<"email" | "password", string>>;
+
+/** Parses FormData and reduces Zod's error tree to one message per field. */
+export function parseLogin(formData: FormData) {
+  const result = loginSchema.safeParse(Object.fromEntries(formData));
+  if (result.success) {
+    return { data: result.data, fieldErrors: undefined } as const;
+  }
+  const { fieldErrors } = z.flattenError(result.error);
+  return {
+    data: undefined,
+    fieldErrors: { email: fieldErrors.email?.[0], password: fieldErrors.password?.[0] } as const,
+  } as const;
+}
+```
+
+```ts
+// src/lib/auth/paths.ts
+import type { Route } from "next";
+
+export const SIGN_IN_PATH = "/login";
+export const ACCOUNT_PATH = "/account";
+
+/** Routes the proxy keeps behind a session. Prefix match, so /account/anything counts too. */
+const PROTECTED_PREFIXES = [ACCOUNT_PATH];
+
+export const isProtectedPath = (pathname: string) =>
+  PROTECTED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+
+/**
+ * Only a relative path is accepted as a place to return to after sign-in: an absolute URL
+ * would let a crafted link send a fresh session to another site.
+ */
+export const isRedirectPath = (value: unknown): value is string =>
+  typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
+
+export const safeRedirectPath = (value: unknown, fallback: string = ACCOUNT_PATH) =>
+  isRedirectPath(value) ? value : fallback;
+
+/** The sign-in page, remembering where to go afterwards. */
+export const signInHref = (callbackUrl: string): Route =>
+  `${SIGN_IN_PATH}?callbackUrl=${encodeURIComponent(callbackUrl)}` as Route;
+```
+
+**Two halves of one configuration.** Auth.js runs in two places: the proxy, in front of the matched routes, and the Node side (Route Handler, Server Components, Server Actions). The proxy should stay light, so the configuration is split. `auth.config.ts` holds what the proxy needs, `auth.ts` adds the credentials provider, which imports the user table and `node:crypto`.
+
+```ts
+// src/lib/auth/auth.config.ts
+import type { NextAuthConfig } from "next-auth";
+import { ACCOUNT_PATH, SIGN_IN_PATH, isProtectedPath, signInHref } from "./paths";
+
+/**
+ * The part of the Auth.js configuration the proxy can run: no provider that needs Node (the
+ * credentials check imports node:crypto), no database. auth.ts spreads this and adds the
+ * provider; proxy.ts uses it as is.
+ */
+export const authConfig = {
+  pages: { signIn: SIGN_IN_PATH },
+  // A JWT in an HttpOnly cookie: no session store, and the proxy can decode it without I/O.
+  session: { strategy: "jwt" },
+  // The demo runs on whatever host starts it; a deployment sets AUTH_URL instead.
+  trustHost: true,
+  providers: [],
+  callbacks: {
+    /**
+     * Runs in the proxy for every matched request with nothing but the decoded cookie: an
+     * optimistic check. It keeps strangers off /account and signed-in users off /login. The
+     * data itself is protected where it is read (auth() in the page and in the Server Action).
+     */
+    authorized({ auth, request: { nextUrl } }) {
+      const signedIn = Boolean(auth?.user);
+      if (isProtectedPath(nextUrl.pathname)) {
+        if (signedIn) return true;
+        // Auth.js would redirect on `false` too, but with an absolute callbackUrl; a path is enough.
+        return Response.redirect(new URL(signInHref(nextUrl.pathname + nextUrl.search), nextUrl.origin));
+      }
+      if (nextUrl.pathname === SIGN_IN_PATH && signedIn) {
+        return Response.redirect(new URL(ACCOUNT_PATH, nextUrl.origin));
+      }
+      return true;
+    },
+    /**
+     * Runs when the JWT is created and whenever it is read; `user` is only set at sign-in.
+     * A credentials provider has no identity provider handing out API tokens, so the demo mints
+     * an opaque one here. It stands in for the token a real upstream would verify.
+     */
+    jwt({ token, user }) {
+      if (user) {
+        token.accessToken = crypto.randomUUID();
+      }
+      return token;
+    },
+    /** Shapes what auth() returns. Only copy what the app needs; the JWT itself stays server-side. */
+    session({ session, token }) {
+      return { ...session, accessToken: token.accessToken ?? "" };
+    },
+  },
+} satisfies NextAuthConfig;
+```
+
+The `authorized` callback is the proxy's whole decision. It sees only the decoded cookie, which is the optimistic check the Next.js authentication guide describes: cheap enough to run on every matched request, prefetches included, and not something to trust with data. `jwt` runs when the token is created and every time it is read; `user` is present only at sign-in, which is when the demo mints an opaque access token in place of the one an identity provider would return. `session` shapes what `auth()` gives the app, and the `.d.ts` teaches TypeScript the extra field.
+
+```ts
+// src/lib/auth/auth.ts
+import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
+import { credentialsSchema } from "@/lib/schemas/login";
+import { authConfig } from "./auth.config";
+import { findUserByEmail, toUser, verifyPassword } from "./users";
+
+/**
+ * The full Auth.js instance, for the Node side: Route Handler, Server Components, Server
+ * Actions. `auth()` reads the session cookie for the current request; `signIn` and `signOut`
+ * are the server-side calls the actions wrap.
+ */
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  ...authConfig,
+  providers: [
+    Credentials({
+      /**
+       * Called with the posted fields when the credentials provider runs. Returning null makes
+       * Auth.js throw CredentialsSignin; returning a user makes it issue the session. The
+       * schema runs again here because this endpoint is reachable without the form.
+       */
+      async authorize(credentials) {
+        const parsed = credentialsSchema.safeParse(credentials);
+        if (!parsed.success) return null;
+        const user = findUserByEmail(parsed.data.email);
+        if (!user || !verifyPassword(parsed.data.password, user.passwordHash)) return null;
+        return toUser(user);
+      },
+    }),
+  ],
+});
+```
+
+```ts
+// src/lib/auth/next-auth.d.ts
+import type { DefaultSession } from "next-auth";
+
+/** Module augmentation: the fields auth.config.ts adds to the session and the JWT. */
+declare module "next-auth" {
+  interface Session {
+    user: DefaultSession["user"];
+    /** Opaque token for the upstream API, issued at sign-in. */
+    accessToken: string;
+  }
+}
+
+declare module "next-auth/jwt" {
+  interface JWT {
+    accessToken?: string;
+  }
+}
+```
+
+The Route Handler gives Auth.js its endpoints. The proxy is the `auth` function itself, with a matcher that keeps it off every other route:
+
+```ts
+// src/app/api/auth/[...nextauth]/route.ts
+import { handlers } from "@/lib/auth/auth";
+
+/**
+ * Auth.js owns everything under /api/auth: the credentials callback, the session endpoint,
+ * sign-out, CSRF. The Server Actions in src/lib/actions/auth.ts call into the same handlers
+ * in-process, so the browser never posts here directly in this app.
+ */
+export const { GET, POST } = handlers;
+```
+
+```ts
+// src/proxy.ts
+import NextAuth from "next-auth";
+import { authConfig } from "@/lib/auth/auth.config";
+
+/**
+ * Runs before the matched routes render. Auth.js decodes the session cookie and hands the
+ * result to the `authorized` callback in auth.config.ts, which redirects or lets the request
+ * through; nothing else happens here. This is the optimistic check from the Next.js auth
+ * guide: it costs no I/O and it keeps strangers off /account before anything renders, but it
+ * is not the last line of defense. The page and the Server Action call auth() again.
+ *
+ * The proxy imports auth.config.ts, not auth.ts: the credentials provider pulls in
+ * node:crypto and the user table, which a redirect decision does not need. The matcher keeps
+ * the proxy off every other route, so the static and cached demos are untouched.
+ */
+export default NextAuth(authConfig).auth;
+
+export const config = { matcher: ["/account/:path*", "/login"] };
+```
+
+**Sign in and sign out.** The action has the `useActionState` shape from Step 15. `signIn` runs the provider and sets the cookie on this response; wrong credentials throw `CredentialsSignin`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom.
+
+```ts
+// src/lib/actions/auth.ts
+"use server";
+
+import type { Route } from "next";
+import { AuthError } from "next-auth";
+import { redirect } from "next/navigation";
+import { signIn, signOut } from "@/lib/auth/auth";
+import { ACCOUNT_PATH } from "@/lib/auth/paths";
+import { type LoginFieldErrors, parseLogin } from "@/lib/schemas/login";
+
+/** Returned to useActionState; must be serializable. */
+export type LoginState =
+  | { status: "idle" }
+  | { status: "invalid"; fieldErrors: LoginFieldErrors }
+  | { status: "failed"; message: string };
+
+/**
+ * Form action behind useActionState. Auth.js's signIn runs the credentials provider and sets
+ * the session cookie on this response. Wrong credentials surface as a CredentialsSignin
+ * error, which becomes state the form can show; any other error is rethrown to error.tsx.
+ *
+ * redirect() is called here rather than left to signIn (redirect: false) so the flow is
+ * visible: sign in, then navigate to where the user was going. redirect() throws, so nothing
+ * runs after it.
+ */
+export async function authenticate(
+  _previous: LoginState,
+  formData: FormData,
+): Promise<LoginState> {
+  const { data, fieldErrors } = parseLogin(formData);
+  if (fieldErrors) {
+    return { status: "invalid", fieldErrors };
+  }
+
+  try {
+    await signIn("credentials", {
+      email: data.email,
+      password: data.password,
+      redirect: false,
+    });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return {
+        status: "failed",
+        message:
+          error.type === "CredentialsSignin" ? "Wrong email or password" : "Could not sign you in",
+      };
+    }
+    throw error;
+  }
+
+  redirect((data.redirectTo ?? ACCOUNT_PATH) as Route);
+}
+
+/** Clears the session cookie and returns to the home page. Bound to a plain <form action>. */
+export async function signOutAction() {
+  await signOut({ redirectTo: "/" });
+}
+```
+
+```tsx
+// src/components/login-form.tsx
+"use client";
+
+import { type FormEvent, useActionState, useState } from "react";
+import { type LoginState, authenticate } from "@/lib/actions/auth";
+import { type LoginFieldErrors, parseLogin } from "@/lib/schemas/login";
+import { Button } from "./button";
+import styles from "./login-form.module.css";
+
+const IDLE: LoginState = { status: "idle" };
+
+interface LoginFormProps {
+  /** Where to go after signing in; already checked to be a relative path. */
+  redirectTo: string;
+}
+
+/**
+ * Same shape as the register-view form: useActionState around a Server Action, the Zod
+ * schema run in onSubmit so a typo never costs a round trip, and the server's verdict shown
+ * from the returned state. The action ends in a redirect, so a successful submit never
+ * produces a new state here; the router simply navigates.
+ */
+export function LoginForm({ redirectTo }: LoginFormProps) {
+  const [state, formAction, pending] = useActionState(authenticate, IDLE);
+  const [clientErrors, setClientErrors] = useState<LoginFieldErrors>({});
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    const { fieldErrors } = parseLogin(new FormData(event.currentTarget));
+    setClientErrors(fieldErrors ?? {});
+    if (fieldErrors) {
+      event.preventDefault();
+    }
+  };
+
+  const fieldErrors = state.status === "invalid" ? state.fieldErrors : clientErrors;
+
+  return (
+    <form action={formAction} onSubmit={handleSubmit} noValidate className={styles.form}>
+      <input type="hidden" name="redirectTo" value={redirectTo} />
+      <label className={styles.field}>
+        Email
+        <input
+          name="email"
+          type="email"
+          autoComplete="username"
+          aria-invalid={fieldErrors.email ? true : undefined}
+          aria-describedby={fieldErrors.email ? "login-email-error" : undefined}
+        />
+      </label>
+      {fieldErrors.email ? (
+        <p id="login-email-error" role="alert" className={styles.error}>
+          {fieldErrors.email}
+        </p>
+      ) : null}
+      <label className={styles.field}>
+        Password
+        <input
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          aria-invalid={fieldErrors.password ? true : undefined}
+          aria-describedby={fieldErrors.password ? "login-password-error" : undefined}
+        />
+      </label>
+      {fieldErrors.password ? (
+        <p id="login-password-error" role="alert" className={styles.error}>
+          {fieldErrors.password}
+        </p>
+      ) : null}
+      <Button type="submit" disabled={pending} aria-busy={pending}>
+        {pending ? "Signing in..." : "Sign in"}
+      </Button>
+      {state.status === "failed" ? (
+        <p role="alert" className={styles.error}>
+          {state.message}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+```
+
+```tsx
+// src/app/login/page.tsx
+import type { Metadata } from "next";
+import { LoginForm } from "@/components/login-form";
+import { PageContainer } from "@/components/page-container";
+import { Panel } from "@/components/panel";
+import { DEMO_ACCOUNT } from "@/lib/auth/demo-account";
+import { safeRedirectPath } from "@/lib/auth/paths";
+
+export const metadata: Metadata = { title: "Sign in" };
+
+/**
+ * A Server Component page: it reads callbackUrl from the URL (which makes the route dynamic)
+ * and renders the Client Component form. The proxy sends signed-in visitors away from here.
+ */
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+  const { callbackUrl } = await searchParams;
+  return (
+    <PageContainer>
+      <Panel title="Sign in">
+        <p>
+          The demo account is <code>{DEMO_ACCOUNT.email}</code> with the password{" "}
+          <code>{DEMO_ACCOUNT.password}</code>. The session is a JWT in an HttpOnly cookie;
+          the Odyssey API ignores it, so signing in only unlocks what this app checks itself.
+        </p>
+        <LoginForm redirectTo={safeRedirectPath(callbackUrl)} />
+      </Panel>
+    </PageContainer>
+  );
+}
+```
+
+**The protected page.** The proxy already turned strangers away, but the page calls `auth()` again, next to the data it renders. That is the defense in depth the guide asks for, and it is also what makes the route dynamic: `auth()` reads cookies, so no segment config is needed.
+
+```tsx
+// src/app/account/page.tsx
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { Button } from "@/components/button";
+import { PageContainer } from "@/components/page-container";
+import { Panel } from "@/components/panel";
+import { signOutAction } from "@/lib/actions/auth";
+import { auth } from "@/lib/auth/auth";
+import { ACCOUNT_PATH, signInHref } from "@/lib/auth/paths";
+
+export const metadata: Metadata = { title: "Account" };
+
+/** Enough of the token to see it changes per sign-in, not enough to reuse it. */
+const mask = (token: string) => `${token.slice(0, 8)}…`;
+
+/**
+ * The proxy already turned strangers away, but it only looked at a cookie. The page checks
+ * again with auth(), next to the data it renders: the defense in depth the Next.js auth guide
+ * asks for. auth() reads cookies, which makes the route dynamic; no segment config needed.
+ */
+export default async function AccountPage() {
+  const session = await auth();
+  if (!session?.user) {
+    redirect(signInHref(ACCOUNT_PATH));
+  }
+
+  return (
+    <PageContainer>
+      <Panel title="Mission control">
+        {/* One template literal, so the HTML has one text node and can be checked as text. */}
+        <p data-testid="signed-in-as">
+          {`Signed in as ${session.user.name} (${session.user.email}).`}
+        </p>
+        <p>
+          API token <code>{mask(session.accessToken)}</code>, issued at sign-in. The
+          register-views Server Action sends it as a bearer header on its GraphQL mutations
+          and refuses to run without a session.
+        </p>
+        <form action={signOutAction}>
+          <Button type="submit">Sign out</Button>
+        </form>
+      </Panel>
+    </PageContainer>
+  );
+}
+```
+
+**The session in a Server Action.** `registerView` from the forms step refuses to run without a session and passes the session's token to Apollo as per-operation `context`; the `SetContextLink` from Step 19 merges those headers with its own. The token does not go through the link's `getToken` slot on purpose: `auth()` reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it at the call site keeps the decision where the session is.
+
+```ts
+// src/lib/actions/register-view.ts
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+import { getClient } from "@/lib/apollo/rsc-client";
+import { auth } from "@/lib/auth/auth";
+import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
+
+/** Returned to useActionState; must be serializable. */
+export type RegisterViewState =
+  | { status: "idle" }
+  | { status: "invalid"; fieldErrors: RegisterViewFieldErrors }
+  | { status: "failed"; message: string }
+  | { status: "registered"; views: number; numberOfViews: number };
+
+/**
+ * Form action for the Server Action form, in the (previousState, formData) shape that
+ * useActionState expects. The browser posts the form, Next.js calls this with the FormData,
+ * and the mutation runs on the server with the RSC client.
+ *
+ * Validation and the session check run here even though the page validated and hid the form:
+ * every "use server" export is a public endpoint. Errors are returned, not thrown, so the
+ * form can show them.
+ *
+ * The session's token travels as per-operation context rather than through the link chain's
+ * getToken: auth() reads cookies, and a link that read cookies on every operation would break
+ * the cached and static routes that share the RSC client. The SetContextLink merges these
+ * headers with its own.
+ *
+ * revalidatePath is what makes the page update: an action that revalidates nothing returns
+ * only its value and Next.js does not re-render the route. With it, the action response
+ * carries the re-rendered page, so TrackDetail shows the new count in the same roundtrip.
+ */
+export async function registerView(
+  _previous: RegisterViewState,
+  formData: FormData,
+): Promise<RegisterViewState> {
+  const { data, fieldErrors } = parseRegisterView(formData);
+  if (fieldErrors) {
+    return { status: "invalid", fieldErrors };
+  }
+
+  const session = await auth();
+  if (!session?.user) {
+    return { status: "failed", message: "Sign in to register views" };
+  }
+
+  const { trackId, views } = data;
+  // One client for the whole action: outside a React render, every getClient() call is a new instance.
+  const client = getClient();
+  let numberOfViews = 0;
+  try {
+    for (let registered = 0; registered < views; registered += 1) {
+      const result = await client.mutate({
+        mutation: IncrementTrackViewsDocument,
+        variables: { trackId },
+        context: { headers: { authorization: `Bearer ${session.accessToken}` } },
+      });
+      numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
+    }
+  } catch (error) {
+    return {
+      status: "failed",
+      message: error instanceof Error ? error.message : "The mutation failed",
+    };
+  }
+
+  revalidatePath(`/rsc/track/${trackId}`);
+  return { status: "registered", views, numberOfViews };
+}
+```
+
+The track page reads the session inside the same Suspense boundary as the track, so the cookie read never blocks the shell, and it shows a sign-in link instead of the form when there is no session:
+
+```tsx
+// src/components/sign-in-prompt.tsx
+import Link from "next/link";
+import { signInHref } from "@/lib/auth/paths";
+import { Button } from "./button";
+import { ContentSection } from "./content-section";
+import styles from "./register-view-form.module.css";
+
+/**
+ * Shown in place of the Server Action form when there is no session. The action checks the
+ * session itself; this prompt only saves a round trip that would fail.
+ */
+export function SignInPrompt({ callbackUrl }: { callbackUrl: string }) {
+  return (
+    <ContentSection>
+      <div className={styles.form} data-testid="sign-in-prompt">
+        <p className={styles.label}>
+          Registering views through the Server Action needs a signed-in user: the action
+          reads the session with auth() and forwards its token to the API.
+        </p>
+        <Link href={signInHref(callbackUrl)}>
+          <Button>Sign in to register views</Button>
+        </Link>
+      </div>
+    </ContentSection>
+  );
+}
+```
+
+**What is not here, and why.** The header has an **Account** link, not the user's name. A session read in the root layout would make every route dynamic on this branch: `/` is `dynamic = "error"` and would fail the build, `/revalidate` would stop being ISR, `/legacy` would render with an empty cookie jar. Per-user UI in a shared layout is the case Cache Components exists for. The `use-cache` branch streams a `UserMenu` into the header behind a Suspense boundary while the shell stays static.
+
+**Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 302 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, and the Server Action response carried a `Set-Cookie` for `authjs.session-token`, HttpOnly. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out: the cookie is gone and `/account` redirects again. `e2e/auth.spec.ts` covers the flow. The unit tests cover the `authorized` decision, the token callbacks, the password hashing, the schema, the action (with `signIn` mocked and the real `CredentialsSignin`), the form, and the session check in `registerView`.
+
+## Step 21: Metadata: file conventions and Open Graph images
 
 `generateMetadata` and the title template exist since Step 7. The rest of the metadata story is files next to the layout: Next.js turns them into routes and `<head>` tags on its own.
 
@@ -3164,7 +3835,7 @@ export default async function Image({ params }: { params: Promise<{ trackId: str
 
 **Check:** view the source of http://localhost:3000/rsc/track/c_0: `og:image` points at `/rsc/track/c_0/opengraph-image`. Open that URL: a card with the track's title, author, and thumbnail. `/manifest.webmanifest` returns the manifest. `e2e/metadata.spec.ts` covers all of it.
 
-## Step 21: Errors and retry
+## Step 22: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -3236,9 +3907,9 @@ export default function RouteError({
 }
 ```
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`, a GraphQL error carrying the upstream REST status in its extensions. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 22 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`, a GraphQL error carrying the upstream REST status in its extensions. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 23 adds a test that proves recovery from a transient failure.
 
-## Step 22: Tests
+## Step 23: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -3254,6 +3925,8 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // next-auth imports `next/server` without an extension; let Vite resolve it instead of Node.
+    server: { deps: { inline: ["next-auth"] } },
   },
 });
 ```
@@ -3343,6 +4016,9 @@ const PORT = Number(process.env.E2E_PORT ?? 3000);
 /** Shared with e2e/revalidate-route.spec.ts; the server only accepts the secret it was started with. */
 export const REVALIDATE_SECRET = "e2e-only-secret";
 
+/** Signs the session cookie of the server under test; `next start` does not load .env.development. */
+const AUTH_SECRET = "e2e-only-auth-secret";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -3357,10 +4033,10 @@ export default defineConfig({
   webServer: {
     command: `pnpm build && pnpm start -p ${PORT}`,
     url: `http://localhost:${PORT}`,
-    // Always build and start our own server: an existing one may lack REVALIDATE_SECRET.
+    // Always build and start our own server: an existing one may lack these secrets.
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { REVALIDATE_SECRET },
+    env: { REVALIDATE_SECRET, AUTH_SECRET },
   },
 });
 ```
@@ -3370,12 +4046,12 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 19 files, 57 tests
-pnpm test:e2e         # builds, starts the server, 30 tests
+pnpm vitest run       # 25 files, 84 tests
+pnpm test:e2e         # builds, starts the server, 36 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
-## Step 23: Build and ship
+## Step 24: Build and ship
 
 ```sh
 pnpm build

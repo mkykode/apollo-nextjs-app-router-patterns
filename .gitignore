@@ -16,9 +16,10 @@
 npm-debug.log*
 .pnpm-debug.log*
 
-# env files: commit only the example
+# env files: commit only the example and the development defaults
 .env*
 !.env.example
+!.env.development
 
 # vercel
 .vercel
