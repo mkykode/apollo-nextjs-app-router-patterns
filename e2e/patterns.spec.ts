@@ -24,7 +24,7 @@ for (const pattern of PATTERNS) {
 
     await expect(page).toHaveURL(`/${pattern.slug}/track/${FIRST_TRACK.id}`);
     await expect(page.getByRole("heading", { level: 1, name: FIRST_TRACK.title })).toBeVisible();
-    await expect(page.getByText(/\d+ view\(s\)/)).toBeVisible();
+    await expect(page.getByText(/\d+ view\(s\)/).first()).toBeVisible();
   });
 }
 
@@ -87,7 +87,7 @@ test("PreloadQuery queryRef: useQueryRefHandlers refetch picks up a server-side 
   request,
 }) => {
   await page.goto(`/preload/track/${FIRST_TRACK.id}`);
-  const views = page.getByText(/\d+ view\(s\)/);
+  const views = page.getByText(/\d+ view\(s\)/).first();
   const shown = Number.parseInt((await views.textContent()) ?? "", 10);
 
   await request.post(GRAPHQL_URI, {
