@@ -1,14 +1,11 @@
 "use client";
 
 import "./dev-messages";
-import { HttpLink } from "@apollo/client";
-import {
-  ApolloClient,
-  ApolloNextAppProvider,
-  InMemoryCache,
-} from "@apollo/client-integration-nextjs";
+import { ApolloClient, ApolloNextAppProvider } from "@apollo/client-integration-nextjs";
 import type { PropsWithChildren } from "react";
 import { GRAPHQL_URI } from "@/lib/graphql-uri";
+import { createCache } from "./cache";
+import { createLinkChain } from "./links";
 
 /**
  * Apollo Client for Client Components.
@@ -21,8 +18,10 @@ import { GRAPHQL_URI } from "@/lib/graphql-uri";
  */
 function makeClient() {
   return new ApolloClient({
-    cache: new InMemoryCache(),
-    link: new HttpLink({ uri: GRAPHQL_URI }),
+    cache: createCache(),
+    // No custom headers here: the browser would need CORS approval for each one. A session
+    // token would come from getToken (a cookie-backed session or an in-memory value).
+    link: createLinkChain({ uri: GRAPHQL_URI }),
   });
 }
 

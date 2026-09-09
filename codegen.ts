@@ -8,7 +8,7 @@ import { GRAPHQL_URI } from "./src/lib/graphql-uri";
  */
 const config: CodegenConfig = {
   overwrite: true,
-  schema: GRAPHQL_URI,
+  schema: [GRAPHQL_URI, "src/graphql/client-schema.graphql"],
   documents: ["src/**/*.graphql"],
   ignoreNoDocuments: true,
   generates: {

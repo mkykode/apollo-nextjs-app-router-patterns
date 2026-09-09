@@ -1,0 +1,6 @@
+# Client-only additions to the server schema, so codegen can type `@client` fields.
+directive @client on FIELD
+
+extend type Track {
+  isFavorite: Boolean!
+}

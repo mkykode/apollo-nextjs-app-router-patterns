@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
 import logo from "@/assets/space_cat_logo.png";
+import { FavoritesCount } from "./favorites-count";
 import { PatternNav, PatternNavLinks } from "./pattern-nav";
 import styles from "./header.module.css";
 
@@ -32,6 +33,7 @@ export function Header() {
         <Suspense fallback={<PatternNavLinks pathname="/" />}>
           <PatternNav />
         </Suspense>
+        <FavoritesCount />
       </div>
     </header>
   );

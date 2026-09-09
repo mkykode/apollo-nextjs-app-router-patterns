@@ -1,0 +1,5 @@
+# A client-only field, resolved by the Track.isFavorite field policy in src/lib/apollo/cache.ts.
+fragment FavoriteStatus_track on Track {
+  id
+  isFavorite @client
+}
