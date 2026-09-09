@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PatternNav } from "./pattern-nav";
 
 const { usePathname } = vi.hoisted(() => ({ usePathname: vi.fn<() => string>() }));
@@ -48,5 +48,32 @@ describe("PatternNav indicator", () => {
     render(<PatternNav />);
 
     expect(screen.getByTestId("pattern-indicator")).toHaveAttribute("data-measured", "false");
+  });
+});
+
+describe("PatternNav resize subscription (useEffectEvent)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("subscribes once, yet measures the pathname that is current when the event fires", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    const resizeCalls = () => add.mock.calls.filter(([type]) => type === "resize").length;
+
+    usePathname.mockReturnValue("/rsc");
+    const { rerender } = render(<PatternNav />);
+    expect(resizeCalls()).toBe(1);
+
+    // A client navigation: with `measure` as a dependency the effect would re-subscribe here.
+    usePathname.mockReturnValue("/preload");
+    rerender(<PatternNav />);
+    expect(resizeCalls()).toBe(1);
+    expect(remove).not.toHaveBeenCalledWith("resize", expect.anything());
+
+    // With an empty dependency array and no Effect Event, the handler would still close over
+    // "/rsc", measure for it, and the indicator would flip to unmeasured for "/preload".
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.getByTestId("pattern-indicator")).toHaveAttribute("data-measured", "true");
   });
 });
