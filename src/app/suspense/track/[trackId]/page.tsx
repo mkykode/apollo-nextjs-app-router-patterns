@@ -6,6 +6,7 @@ import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { RegisterViewClientForm } from "@/components/register-view-client-form";
 import { TrackDetail } from "@/components/track-detail";
+import { TrackPreview } from "@/components/track-preview";
 
 /**
  * Client pages receive `params` as a Promise too; unwrap it with React's `use()`.
@@ -20,6 +21,7 @@ export default function SuspenseTrackPage({ params }: PageProps<"/suspense/track
     <PageContainer>
       <TrackDetail track={data.track} />
       <RegisterViewClientForm trackId={trackId} />
+      <TrackPreview currentTrackId={trackId} />
     </PageContainer>
   );
 }

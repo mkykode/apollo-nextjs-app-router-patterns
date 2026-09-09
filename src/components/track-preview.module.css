@@ -1,0 +1,67 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  margin-bottom: 30px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-dark);
+  background-color: var(--silver-lighter);
+}
+
+.panel h4 {
+  font-size: 1.2em;
+}
+
+.label {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-secondary);
+}
+
+.field select {
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-darker);
+  font: inherit;
+  color: var(--color-text);
+  background-color: white;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.preview {
+  min-height: 1.5em;
+  transition: opacity 150ms ease-in;
+}
+
+.preview[data-pending="true"] {
+  opacity: 0.5;
+}
+
+.preview p {
+  margin: 0;
+}
+
+.fallback {
+  color: var(--grey-light);
+}
