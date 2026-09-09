@@ -37,11 +37,11 @@ export function TrackDetail({ track }: { track: TrackDetail_TrackFragment }) {
             <h4>Track details</h4>
             <div className={styles.iconAndLabel}>
               <IconView size={16} />
-              <div className={styles.viewCount}>{numberOfViews ?? 0} view(s)</div>
+              <div className={styles.viewCount}>{`${numberOfViews ?? 0} view(s)`}</div>
             </div>
             <div className={styles.iconAndLabel}>
               <IconBook size={14} />
-              <div>{modulesCount ?? 0} modules</div>
+              <div>{`${modulesCount ?? 0} modules`}</div>
             </div>
             <div className={styles.iconAndLabel}>
               <IconTime size={14} />

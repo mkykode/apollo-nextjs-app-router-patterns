@@ -910,12 +910,12 @@ import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
-
+import { cache } from 'react'
 type Props = PageProps<"/rsc/track/[trackId]">;
 
-const getTrack = (trackId: string) =>
-  query({ query: GetTrackDocument, variables: { trackId }, errorPolicy: "none" });
-
+const getTrack = cache((trackId: string) =>
+  query({ query: GetTrackDocument, variables: { trackId }, errorPolicy: "none" })
+)
 /**
  * generateMetadata and the page both run GetTrack. Because registerApolloClient shares
  * one client per request, the second call is served from that client's cache:
@@ -945,7 +945,17 @@ One more file. Next.js's default for a `fetch` with no options is `auto no cache
 
 ```tsx
 // src/app/rsc/layout.tsx
+import type { ReactNode } from "react";
 
+/**
+ * This pattern fetches at request time. Without this segment config Next.js would fetch once
+ * during `next build` and prerender the route with that data (the default `auto no cache`).
+ */
+export const dynamic = "force-dynamic";
+
+export default function RscLayout({ children }: { children: ReactNode }) {
+  return children;
+}
 ```
 
 **Check:**
