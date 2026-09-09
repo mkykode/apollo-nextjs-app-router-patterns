@@ -9,6 +9,7 @@ By the end you will be able to:
 - use every caching lever of Cache Components on purpose: `"use cache"` on a function and on a page, built-in and custom `cacheLife` profiles, `cacheTag`, `generateStaticParams`, `connection()`, and the three invalidation APIs `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, from a click and from a form, validate with one Zod schema on both sides, and let the normalized cache do the update
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
+- tell the three cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, and no effect for everything else
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
@@ -52,10 +53,11 @@ The reference material (pattern table, architecture diagram, interview talking p
 12. [Pattern 6: RSC and the Next.js Data Cache](#step-12-pattern-6-rsc-and-the-nextjs-data-cache)
 13. [Forms: a Server Action and a client mutation](#step-13-forms-a-server-action-and-a-client-mutation)
 14. [Transitions: keep the old UI while the new one loads](#step-14-transitions-keep-the-old-ui-while-the-new-one-loads)
-15. [Errors and retry](#step-15-errors-and-retry)
-16. [Tests](#step-16-tests)
-17. [Build and ship](#step-17-build-and-ship)
-18. [What you learned](#what-you-learned)
+15. [Effects: useLayoutEffect, useEffect, and no effect at all](#step-15-effects-uselayouteffect-useeffect-and-no-effect-at-all)
+16. [Errors and retry](#step-16-errors-and-retry)
+17. [Tests](#step-17-tests)
+18. [Build and ship](#step-18-build-and-ship)
+19. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -405,9 +407,11 @@ The same function runs in the browser before a submit and on the server inside t
 
 The form component is a Client Component because it holds state, but the mutation runs on the server. `onSubmit` validates with Zod and calls `preventDefault` on failure, so invalid input never dispatches the action. With JavaScript disabled the browser submits natively and only the server-side validation runs; the form still works.
 
+It also shows `useOptimistic`, React's counterpart to Apollo's `optimisticResponse` for Server Actions. The hook takes the server-rendered count as its base value and a reducer; calling `addViews` inside the form action shows the expected count immediately, and React discards the optimistic value when the action settles. What replaces it is whatever the re-rendered page passes in: the new count on success, the old one if the action failed. Two rules: the update must happen inside a transition or action, which a form action is, and the base value must come from the server, or there is nothing to fall back to.
+
 @@include(src/components/register-view-form.tsx)@@
 
-Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
+Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`, passing `numberOfViews` from the query result.
 
 **The all-client form.** This one runs the same mutation from the browser with `useMutation`, once per view, in parallel. Three Apollo features do the work: `useFragment` subscribes to the `Track` entity in the normalized cache, so the count in the form is the same object `TrackDetail` renders; `optimisticResponse` writes the expected result before the server answers, then the real response replaces it, or a failure rolls it back; and the error branch shows the typed errors Apollo Client 4 returns (`CombinedGraphQLErrors` when the GraphQL server rejects the input, `ServerError` for HTTP failures). The fragment is colocated like the others:
 
@@ -417,7 +421,7 @@ Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 Run `pnpm generate`, then render it under `TrackDetail` in `src/app/suspense/track/[trackId]/page.tsx`.
 
-**Check:** on http://localhost:3000/rsc/track/c_0, enter `9` and submit: the message appears and the Network tab shows no request. Enter `2`: one POST to the page with a `next-action` header, no GraphQL request from the browser, and the count in the details box goes up by two when the page re-renders. On http://localhost:3000/suspense/track/c_0, enter `2`: two GraphQL POSTs from the browser, and both counts (details box and "Cache says") move at once, before the responses arrive. Stop the API with DevTools offline mode and submit again: the count reverts and the error shows. `e2e/forms.spec.ts` covers both forms; the unit tests cover the schema, the Server Action (with `server-only` and the client mocked), and the optimistic update and rollback with `MockedProvider`.
+**Check:** on http://localhost:3000/rsc/track/c_0, enter `9` and submit: the message appears and the Network tab shows no request. Enter `2` with the network throttled: the form's "Server count" jumps by two at once and says "(pending)", then one POST to the page with a `next-action` header and no GraphQL request from the browser, and the count in the details box goes up by two when the page re-renders. On http://localhost:3000/suspense/track/c_0, enter `2`: two GraphQL POSTs from the browser, and both counts (details box and "Cache says") move at once, before the responses arrive. Stop the API with DevTools offline mode and submit again: the count reverts and the error shows. `e2e/forms.spec.ts` covers both forms; the unit tests cover the schema, the Server Action (with `server-only` and the client mocked), and the optimistic update and rollback with `MockedProvider`.
 
 ## Step 14: Transitions: keep the old UI while the new one loads
 
@@ -437,7 +441,7 @@ Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 **Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
 
-## Step 15: Errors and retry
+## Step 16: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -445,9 +449,9 @@ There is a trap. Apollo's suspense hooks keep a rejected result in their cache u
 
 @@include(src/app/error.tsx)@@
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 16 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 17 adds a test that proves recovery from a transient failure.
 
-## Step 16: Tests
+## Step 17: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -468,11 +472,12 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 10 files, 34 tests
-pnpm test:e2e         # builds, starts the server, 17 tests
+pnpm vitest run       # 11 files, 38 tests
+pnpm test:e2e         # builds, starts the server, 19 tests
+E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
-## Step 17: Build and ship
+## Step 18: Build and ship
 
 ```sh
 pnpm build
@@ -500,8 +505,9 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `"use client"` is an import-graph boundary. Server-rendered `children` pass through Client Components untouched, which is why one provider in the root layout costs the RSC pattern nothing.
 - Suspense hooks turn streaming SSR on. `useQuery` ships a spinner; `useSuspenseQuery` ships the data and a warm cache.
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
-- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself; `optimisticResponse` moves it before the server answers, and `useFragment` lets any component read the entity live. When there is no browser cache, use a Server Action, from a click or a `<form action>`, validate on both sides, and revalidate so Next.js re-renders the route.
+- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself; `optimisticResponse` moves it before the server answers, and `useFragment` lets any component read the entity live. When there is no browser cache, use a Server Action, from a click or a `<form action>`, validate on both sides, revalidate so Next.js re-renders the route, and use `useOptimistic` for the same instant feedback.
 - `startTransition` keeps the current UI while a suspense query re-runs with new variables or a Server Action runs from a button; `isPending` is the dim-or-disable signal.
+- `useLayoutEffect` is for DOM measurements that must change what gets painted; `useEffect` is for subscribing to things outside React; fetching, derived state, and event handling need neither.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
 - Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` (built-in or custom profile) and `cacheTag` cache a function or a page across requests, `generateStaticParams` prerenders known paths, `connection()` forces request-time rendering where Next.js cannot detect it, and three invalidation APIs exist: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
