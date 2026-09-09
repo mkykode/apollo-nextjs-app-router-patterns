@@ -69,3 +69,39 @@ test("Client form: validated in the browser, useMutation updates every reader of
   expect(graphqlRequests).toBe(2);
   expect(parse(await cacheViews.textContent())).toBe(parse(await detailViews.textContent()));
 });
+
+test("useOptimistic shows the expected count while the Server Action is pending", async ({
+  page,
+}) => {
+  await page.goto("/rsc/track/c_6");
+  const detailViews = page.getByText(VIEWS).first();
+  const optimistic = page.getByTestId("optimistic-views");
+  const before = parse(await detailViews.textContent());
+  expect(parse(await optimistic.textContent())).toBe(before);
+
+  // Slow the action down so the pending state is observable.
+  await page.route(
+    (url) => url.host === new URL(page.url()).host,
+    async (route, request) => {
+      if (request.method() === "POST" && "next-action" in request.headers()) {
+        const response = await route.fetch();
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await route.fulfill({ response });
+        return;
+      }
+      await route.continue();
+    },
+  );
+
+  await page.getByLabel("Views to register").fill("3");
+  await page.getByRole("button", { name: "Register views" }).click();
+
+  // Optimistic: the form's count moved by 3 at once; the server-rendered detail has not.
+  await expect(optimistic).toHaveText(`Server count: ${before + 3} view(s) (pending)`);
+  expect(parse(await detailViews.textContent())).toBe(before);
+
+  // Settled: the page re-rendered; both counts agree and the optimistic value is gone.
+  await expect.poll(async () => parse(await detailViews.textContent())).toBeGreaterThanOrEqual(before + 3);
+  await expect(optimistic).not.toContainText("(pending)");
+  expect(parse(await optimistic.textContent())).toBe(parse(await detailViews.textContent()));
+});

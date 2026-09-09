@@ -30,7 +30,7 @@ export default async function RscTrackPage({ params }: Props) {
     <PageContainer>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      <RegisterViewForm trackId={trackId} />
+      <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
     </PageContainer>
   );
 }
