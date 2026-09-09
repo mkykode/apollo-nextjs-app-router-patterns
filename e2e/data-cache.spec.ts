@@ -1,7 +1,8 @@
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import { GRAPHQL_URI } from "../src/lib/graphql-uri";
 
-const TRACK = { id: "c_0", title: "Cat-stronomy, an introduction" };
+// A track no other spec opens: their Server Actions call updateTag on the track they click.
+const TRACK = { id: "c_1", title: "Famous Catstronauts" };
 
 const VIEWS = /(\d+) view\(s\)/;
 
