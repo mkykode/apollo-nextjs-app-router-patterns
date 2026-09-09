@@ -1,0 +1,5 @@
+# What the client form reads live from the normalized cache: the entity the mutation updates.
+fragment RegisterViewClientForm_track on Track {
+  id
+  numberOfViews
+}

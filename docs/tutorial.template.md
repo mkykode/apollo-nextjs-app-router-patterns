@@ -7,7 +7,7 @@ By the end you will be able to:
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
 - use every caching lever of the classic Next.js model on purpose: `dynamic` (`force-dynamic`, `force-static`, `error`), segment `revalidate`, fetch `next.revalidate` and tags, `generateStaticParams`, `dynamicParams`, `updateTag`, `revalidatePath`, and `revalidateTag`
-- run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
+- run a mutation with `useMutation` and with a Server Action, from a click and from a form, validate with one Zod schema on both sides, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
@@ -49,10 +49,11 @@ The reference material (pattern table, architecture diagram, interview talking p
 10. [Pattern 4: `useBackgroundQuery`](#step-10-pattern-4-usebackgroundquery)
 11. [Pattern 5: `useQuery`, the course way](#step-11-pattern-5-usequery-the-course-way)
 12. [Pattern 6: RSC and the Next.js Data Cache](#step-12-pattern-6-rsc-and-the-nextjs-data-cache)
-13. [Errors and retry](#step-13-errors-and-retry)
-14. [Tests](#step-14-tests)
-15. [Build and ship](#step-15-build-and-ship)
-16. [What you learned](#what-you-learned)
+13. [Forms: a Server Action and a client mutation](#step-13-forms-a-server-action-and-a-client-mutation)
+14. [Errors and retry](#step-14-errors-and-retry)
+15. [Tests](#step-15-tests)
+16. [Build and ship](#step-16-build-and-ship)
+17. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -386,7 +387,35 @@ curl -s -X POST "http://localhost:3000/api/revalidate?tag=track:c_0&secret=test"
 
 Reload the detail page twice: the first load may still be stale, the second is fresh. `e2e/data-cache.spec.ts` and `e2e/revalidate-route.spec.ts` automate both flows.
 
-## Step 13: Errors and retry
+## Step 13: Forms: a Server Action and a client mutation
+
+The card click showed both ways to run a mutation. Forms make the difference easier to see, and they need validation, so each detail page gets a form with a "views to register" field. Install Zod (`pnpm add zod`) and write the schema once:
+
+@@include(src/lib/schemas/register-view.ts)@@
+
+The same function runs in the browser before a submit and on the server inside the action or, for the client form, next to the GraphQL server's own validation. `FormData` values are strings, which is what `z.coerce` is for.
+
+**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip.
+
+@@include(src/lib/actions/register-view.ts)@@
+
+The form component is a Client Component because it holds state, but the mutation runs on the server. `onSubmit` validates with Zod and calls `preventDefault` on failure, so invalid input never dispatches the action. With JavaScript disabled the browser submits natively and only the server-side validation runs; the form still works.
+
+@@include(src/components/register-view-form.tsx)@@
+
+Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
+
+**The all-client form.** This one runs the same mutation from the browser with `useMutation`, once per view, in parallel. Three Apollo features do the work: `useFragment` subscribes to the `Track` entity in the normalized cache, so the count in the form is the same object `TrackDetail` renders; `optimisticResponse` writes the expected result before the server answers, then the real response replaces it, or a failure rolls it back; and the error branch shows the typed errors Apollo Client 4 returns (`CombinedGraphQLErrors` when the GraphQL server rejects the input, `ServerError` for HTTP failures). The fragment is colocated like the others:
+
+@@include(src/components/register-view-client-form.graphql)@@
+
+@@include(src/components/register-view-client-form.tsx)@@
+
+Run `pnpm generate`, then render it under `TrackDetail` in `src/app/suspense/track/[trackId]/page.tsx`.
+
+**Check:** on http://localhost:3000/rsc/track/c_0, enter `9` and submit: the message appears and the Network tab shows no request. Enter `2`: one POST to the page with a `next-action` header, no GraphQL request from the browser, and the count in the details box goes up by two when the page re-renders. On http://localhost:3000/suspense/track/c_0, enter `2`: two GraphQL POSTs from the browser, and both counts (details box and "Cache says") move at once, before the responses arrive. Stop the API with DevTools offline mode and submit again: the count reverts and the error shows. `e2e/forms.spec.ts` covers both forms; the unit tests cover the schema, the Server Action (with `server-only` and the client mocked), and the optimistic update and rollback with `MockedProvider`.
+
+## Step 14: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -394,9 +423,9 @@ There is a trap. Apollo's suspense hooks keep a rejected result in their cache u
 
 @@include(src/app/error.tsx)@@
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 14 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 15 adds a test that proves recovery from a transient failure.
 
-## Step 14: Tests
+## Step 15: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -417,11 +446,11 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 13 tests
+pnpm vitest run       # 9 files, 31 tests
+pnpm test:e2e         # builds, starts the server, 15 tests
 ```
 
-## Step 15: Build and ship
+## Step 16: Build and ship
 
 ```sh
 pnpm build
@@ -449,7 +478,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `"use client"` is an import-graph boundary. Server-rendered `children` pass through Client Components untouched, which is why one provider in the root layout costs the RSC pattern nothing.
 - Suspense hooks turn streaming SSR on. `useQuery` ships a spinner; `useSuspenseQuery` ships the data and a warm cache.
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
-- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
+- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself; `optimisticResponse` moves it before the server answers, and `useFragment` lets any component read the entity live. When there is no browser cache, use a Server Action, from a click or a `<form action>`, and let Next.js re-render the route.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
 - Next.js caching is decided per route and per fetch: `dynamic` for the rendering mode, `revalidate` at the segment or the fetch, `generateStaticParams` for known paths, and three invalidation APIs: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 

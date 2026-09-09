@@ -4,6 +4,7 @@ import { useSuspenseQuery } from "@apollo/client/react";
 import { use } from "react";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { RegisterViewClientForm } from "@/components/register-view-client-form";
 import { TrackDetail } from "@/components/track-detail";
 
 /**
@@ -18,6 +19,7 @@ export default function SuspenseTrackPage({ params }: PageProps<"/suspense/track
   return (
     <PageContainer>
       <TrackDetail track={data.track} />
+      <RegisterViewClientForm trackId={trackId} />
     </PageContainer>
   );
 }

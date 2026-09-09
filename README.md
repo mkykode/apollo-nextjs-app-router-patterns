@@ -7,7 +7,7 @@ By the end you will be able to:
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
 - use every caching lever of the classic Next.js model on purpose: `dynamic` (`force-dynamic`, `force-static`, `error`), segment `revalidate`, fetch `next.revalidate` and tags, `generateStaticParams`, `dynamicParams`, `updateTag`, `revalidatePath`, and `revalidateTag`
-- run a mutation with `useMutation` and with a Server Action, and let the normalized cache do the update
+- run a mutation with `useMutation` and with a Server Action, from a click and from a form, validate with one Zod schema on both sides, and let the normalized cache do the update
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
 
@@ -49,10 +49,11 @@ The reference material (pattern table, architecture diagram, interview talking p
 10. [Pattern 4: `useBackgroundQuery`](#step-10-pattern-4-usebackgroundquery)
 11. [Pattern 5: `useQuery`, the course way](#step-11-pattern-5-usequery-the-course-way)
 12. [Pattern 6: RSC and the Next.js Data Cache](#step-12-pattern-6-rsc-and-the-nextjs-data-cache)
-13. [Errors and retry](#step-13-errors-and-retry)
-14. [Tests](#step-14-tests)
-15. [Build and ship](#step-15-build-and-ship)
-16. [What you learned](#what-you-learned)
+13. [Forms: a Server Action and a client mutation](#step-13-forms-a-server-action-and-a-client-mutation)
+14. [Errors and retry](#step-14-errors-and-retry)
+15. [Tests](#step-15-tests)
+16. [Build and ship](#step-16-build-and-ship)
+17. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -110,7 +111,8 @@ Replace the dependency blocks in `package.json`. The versions here are the ones 
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
     "rxjs": "^7.8.2",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@graphql-codegen/cli": "^7.4.0",
@@ -923,6 +925,7 @@ The detail page shows the payoff of one client per request. `generateMetadata` a
 import type { Metadata } from "next";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { RegisterViewForm } from "@/components/register-view-form";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
 import { cache } from 'react'
@@ -949,6 +952,7 @@ export default async function RscTrackPage({ params }: Props) {
   return (
     <PageContainer>
       <TrackDetail track={data.track} />
+      <RegisterViewForm trackId={trackId} />
     </PageContainer>
   );
 }
@@ -1064,6 +1068,7 @@ import { useSuspenseQuery } from "@apollo/client/react";
 import { use } from "react";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { RegisterViewClientForm } from "@/components/register-view-client-form";
 import { TrackDetail } from "@/components/track-detail";
 
 /**
@@ -1078,6 +1083,7 @@ export default function SuspenseTrackPage({ params }: PageProps<"/suspense/track
   return (
     <PageContainer>
       <TrackDetail track={data.track} />
+      <RegisterViewClientForm trackId={trackId} />
     </PageContainer>
   );
 }
@@ -1620,7 +1626,322 @@ curl -s -X POST "http://localhost:3000/api/revalidate?tag=track:c_0&secret=test"
 
 Reload the detail page twice: the first load may still be stale, the second is fresh. `e2e/data-cache.spec.ts` and `e2e/revalidate-route.spec.ts` automate both flows.
 
-## Step 13: Errors and retry
+## Step 13: Forms: a Server Action and a client mutation
+
+The card click showed both ways to run a mutation. Forms make the difference easier to see, and they need validation, so each detail page gets a form with a "views to register" field. Install Zod (`pnpm add zod`) and write the schema once:
+
+```ts
+// src/lib/schemas/register-view.ts
+import { z } from "zod";
+
+/**
+ * One schema for both forms and both sides. The browser runs it before submitting so typos
+ * never cost a round trip; the Server Action runs it again because the client can be bypassed.
+ * FormData values are strings, hence `coerce` on the number; an empty field is treated as
+ * missing rather than coerced to 0, so it gets the "enter a value" message.
+ */
+export const registerViewSchema = z.object({
+  trackId: z.string().regex(/^[\w-]{1,64}$/, "Invalid track id"),
+  views: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce
+      .number({ error: "Enter how many views to register" })
+      .int("Whole numbers only")
+      .min(1, "Register at least 1 view")
+      .max(5, "At most 5 views at a time"),
+  ),
+});
+
+export type RegisterViewInput = z.infer<typeof registerViewSchema>;
+export type RegisterViewFieldErrors = Partial<Record<keyof RegisterViewInput, string>>;
+
+/** Parses FormData and reduces Zod's error tree to one message per field. */
+export function parseRegisterView(formData: FormData) {
+  const result = registerViewSchema.safeParse(Object.fromEntries(formData));
+  if (result.success) {
+    return { data: result.data, fieldErrors: undefined } as const;
+  }
+  const { fieldErrors } = z.flattenError(result.error);
+  return {
+    data: undefined,
+    fieldErrors: { trackId: fieldErrors.trackId?.[0], views: fieldErrors.views?.[0] } as const,
+  } as const;
+}
+```
+
+The same function runs in the browser before a submit and on the server inside the action or, for the client form, next to the GraphQL server's own validation. `FormData` values are strings, which is what `z.coerce` is for.
+
+**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip.
+
+```ts
+// src/lib/actions/register-view.ts
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
+import { getClient } from "@/lib/apollo/rsc-client";
+import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
+
+/** Returned to useActionState; must be serializable. */
+export type RegisterViewState =
+  | { status: "idle" }
+  | { status: "invalid"; fieldErrors: RegisterViewFieldErrors }
+  | { status: "failed"; message: string }
+  | { status: "registered"; views: number; numberOfViews: number };
+
+/**
+ * Form action for the Server Action form, in the (previousState, formData) shape that
+ * useActionState expects. The browser posts the form, Next.js calls this with the FormData,
+ * and the mutation runs on the server with the RSC client.
+ *
+ * Validation runs here even though the form validated in the browser: every "use server"
+ * export is a public endpoint. Errors are returned, not thrown, so the form can show them.
+ *
+ * revalidatePath is what makes the page update: an action that revalidates nothing returns
+ * only its value and Next.js does not re-render the route. With it, the action response
+ * carries the re-rendered page, so TrackDetail shows the new count in the same roundtrip.
+ */
+export async function registerView(
+  _previous: RegisterViewState,
+  formData: FormData,
+): Promise<RegisterViewState> {
+  const { data, fieldErrors } = parseRegisterView(formData);
+  if (fieldErrors) {
+    return { status: "invalid", fieldErrors };
+  }
+
+  const { trackId, views } = data;
+  let numberOfViews = 0;
+  try {
+    for (let registered = 0; registered < views; registered += 1) {
+      const result = await getClient().mutate({
+        mutation: IncrementTrackViewsDocument,
+        variables: { trackId },
+      });
+      numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
+    }
+  } catch (error) {
+    return {
+      status: "failed",
+      message: error instanceof Error ? error.message : "The mutation failed",
+    };
+  }
+
+  revalidatePath(`/rsc/track/${trackId}`);
+  return { status: "registered", views, numberOfViews };
+}
+```
+
+The form component is a Client Component because it holds state, but the mutation runs on the server. `onSubmit` validates with Zod and calls `preventDefault` on failure, so invalid input never dispatches the action. With JavaScript disabled the browser submits natively and only the server-side validation runs; the form still works.
+
+```tsx
+// src/components/register-view-form.tsx
+"use client";
+
+import { type FormEvent, useActionState, useState } from "react";
+import { type RegisterViewState, registerView } from "@/lib/actions/register-view";
+import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
+import { Button } from "./button";
+import { ContentSection } from "./content-section";
+import styles from "./register-view-form.module.css";
+
+const IDLE: RegisterViewState = { status: "idle" };
+
+/**
+ * The Server Action form. The component is a Client Component because it holds state
+ * (useActionState), but the mutation runs on the server: `action={formAction}` posts the
+ * form to Next.js, which calls registerView. It still works with JavaScript disabled; the
+ * browser then submits the form natively and only the server-side validation runs.
+ *
+ * Client-side validation happens in onSubmit with the same Zod schema. When it fails,
+ * preventDefault stops the action from being dispatched, so no round trip is made.
+ */
+export function RegisterViewForm({ trackId }: { trackId: string }) {
+  const [state, formAction, pending] = useActionState(registerView, IDLE);
+  const [clientErrors, setClientErrors] = useState<RegisterViewFieldErrors>({});
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    const { fieldErrors } = parseRegisterView(new FormData(event.currentTarget));
+    setClientErrors(fieldErrors ?? {});
+    if (fieldErrors) {
+      event.preventDefault();
+    }
+  };
+
+  const fieldErrors = state.status === "invalid" ? state.fieldErrors : clientErrors;
+
+  return (
+    <ContentSection>
+      <form action={formAction} onSubmit={handleSubmit} noValidate className={styles.form}>
+        <input type="hidden" name="trackId" value={trackId} />
+        <p className={styles.label}>
+          Server Action form: validated in the browser, validated again and run on the server,
+          then Next.js re-renders this page with the new count.
+        </p>
+        <label className={styles.field}>
+          Views to register
+          <input
+            name="views"
+            type="number"
+            min={1}
+            max={5}
+            defaultValue={1}
+            aria-invalid={fieldErrors.views ? true : undefined}
+            aria-describedby={fieldErrors.views ? "server-form-views-error" : undefined}
+          />
+        </label>
+        {fieldErrors.views ? (
+          <p id="server-form-views-error" role="alert" className={styles.error}>
+            {fieldErrors.views}
+          </p>
+        ) : null}
+        <Button type="submit" disabled={pending} aria-busy={pending}>
+          {pending ? "Registering..." : "Register views"}
+        </Button>
+        {state.status === "registered" ? (
+          <p className={styles.count}>
+            Registered {state.views} view(s). The server now counts {state.numberOfViews}.
+          </p>
+        ) : null}
+        {state.status === "failed" ? (
+          <p role="alert" className={styles.error}>
+            {state.message}
+          </p>
+        ) : null}
+      </form>
+    </ContentSection>
+  );
+}
+```
+
+Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
+
+**The all-client form.** This one runs the same mutation from the browser with `useMutation`, once per view, in parallel. Three Apollo features do the work: `useFragment` subscribes to the `Track` entity in the normalized cache, so the count in the form is the same object `TrackDetail` renders; `optimisticResponse` writes the expected result before the server answers, then the real response replaces it, or a failure rolls it back; and the error branch shows the typed errors Apollo Client 4 returns (`CombinedGraphQLErrors` when the GraphQL server rejects the input, `ServerError` for HTTP failures). The fragment is colocated like the others:
+
+```graphql
+# src/components/register-view-client-form.graphql
+# What the client form reads live from the normalized cache: the entity the mutation updates.
+fragment RegisterViewClientForm_track on Track {
+  id
+  numberOfViews
+}
+```
+
+```tsx
+// src/components/register-view-client-form.tsx
+"use client";
+
+import { CombinedGraphQLErrors } from "@apollo/client/errors";
+import { useFragment, useMutation } from "@apollo/client/react";
+import { type FormEvent, useState } from "react";
+import {
+  IncrementTrackViewsDocument,
+  RegisterViewClientForm_TrackFragmentDoc,
+} from "@/__generated__/graphql";
+import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
+import { Button } from "./button";
+import { ContentSection } from "./content-section";
+import styles from "./register-view-form.module.css";
+
+/**
+ * A form that is entirely a Client Component, wired to Apollo:
+ * - the same Zod schema validates in the browser; the GraphQL server validates again and
+ *   its errors come back typed (CombinedGraphQLErrors for resolver errors, ServerError
+ *   for HTTP failures), all satisfying ErrorLike.
+ * - useFragment subscribes to the Track entity in the normalized cache, so the count shown
+ *   here is the same object TrackDetail renders and updates the instant the cache changes.
+ * - useMutation runs the mutation from the browser. optimisticResponse writes the expected
+ *   result into the cache before the server answers; the real response then replaces it,
+ *   or a failure rolls it back.
+ */
+export function RegisterViewClientForm({ trackId }: { trackId: string }) {
+  const { data: track, complete } = useFragment({
+    fragment: RegisterViewClientForm_TrackFragmentDoc,
+    from: { __typename: "Track", id: trackId },
+  });
+  const [registerView, { loading, error, reset }] = useMutation(IncrementTrackViewsDocument);
+  const [fieldErrors, setFieldErrors] = useState<RegisterViewFieldErrors>({});
+  const numberOfViews = complete ? (track.numberOfViews ?? 0) : 0;
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const { data, fieldErrors: errors } = parseRegisterView(new FormData(event.currentTarget));
+    setFieldErrors(errors ?? {});
+    if (!data) return;
+
+    // One mutation per view, in parallel. Each optimistic write bumps the count by one more;
+    // the server responses then settle on the real total. Rejections surface through `error`.
+    void Promise.all(
+      Array.from({ length: data.views }, (_, index) =>
+        registerView({
+          variables: { trackId },
+          optimisticResponse: {
+            incrementTrackViews: {
+              __typename: "IncrementTrackViewsResponse",
+              code: 200,
+              success: true,
+              message: "optimistic",
+              track: { __typename: "Track", id: trackId, numberOfViews: numberOfViews + index + 1 },
+            },
+          },
+        }),
+      ),
+    ).catch(() => undefined);
+  };
+
+  return (
+    <ContentSection>
+      <form onSubmit={handleSubmit} noValidate className={styles.form}>
+        <input type="hidden" name="trackId" value={trackId} />
+        <p className={styles.label}>
+          Client form: validated in the browser with the same schema, then useMutation runs
+          the mutation here and the normalized cache updates every reader of this track,
+          optimistically first.
+        </p>
+        <p className={styles.count} data-testid="cache-views">
+          Cache says: {`${numberOfViews} view(s)`}
+        </p>
+        <label className={styles.field}>
+          Views to register
+          <input
+            name="views"
+            type="number"
+            min={1}
+            max={5}
+            defaultValue={1}
+            aria-invalid={fieldErrors.views ? true : undefined}
+            aria-describedby={fieldErrors.views ? "client-form-views-error" : undefined}
+          />
+        </label>
+        {fieldErrors.views ? (
+          <p id="client-form-views-error" role="alert" className={styles.error}>
+            {fieldErrors.views}
+          </p>
+        ) : null}
+        <Button type="submit" disabled={loading} aria-busy={loading}>
+          {loading ? "Registering..." : "Register views"}
+        </Button>
+        {error ? (
+          <p role="alert" className={styles.error}>
+            {CombinedGraphQLErrors.is(error)
+              ? `The API rejected it: ${error.errors.map((graphqlError) => graphqlError.message).join(", ")}`
+              : error.message}{" "}
+            <button type="button" onClick={reset} className={styles.dismiss}>
+              Dismiss
+            </button>
+          </p>
+        ) : null}
+      </form>
+    </ContentSection>
+  );
+}
+```
+
+Run `pnpm generate`, then render it under `TrackDetail` in `src/app/suspense/track/[trackId]/page.tsx`.
+
+**Check:** on http://localhost:3000/rsc/track/c_0, enter `9` and submit: the message appears and the Network tab shows no request. Enter `2`: one POST to the page with a `next-action` header, no GraphQL request from the browser, and the count in the details box goes up by two when the page re-renders. On http://localhost:3000/suspense/track/c_0, enter `2`: two GraphQL POSTs from the browser, and both counts (details box and "Cache says") move at once, before the responses arrive. Stop the API with DevTools offline mode and submit again: the count reverts and the error shows. `e2e/forms.spec.ts` covers both forms; the unit tests cover the schema, the Server Action (with `server-only` and the client mocked), and the optimistic update and rollback with `MockedProvider`.
+
+## Step 14: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -1679,9 +2000,9 @@ export default function RouteError({
 }
 ```
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 14 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 15 adds a test that proves recovery from a transient failure.
 
-## Step 14: Tests
+## Step 15: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -1812,11 +2133,11 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 6 files, 20 tests
-pnpm test:e2e         # builds, starts the server, 13 tests
+pnpm vitest run       # 9 files, 31 tests
+pnpm test:e2e         # builds, starts the server, 15 tests
 ```
 
-## Step 15: Build and ship
+## Step 16: Build and ship
 
 ```sh
 pnpm build
@@ -1844,7 +2165,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - `"use client"` is an import-graph boundary. Server-rendered `children` pass through Client Components untouched, which is why one provider in the root layout costs the RSC pattern nothing.
 - Suspense hooks turn streaming SSR on. `useQuery` ships a spinner; `useSuspenseQuery` ships the data and a warm cache.
 - `PreloadQuery` and `useBackgroundQuery` start a request before the component that needs it renders. Same idea, different side of the boundary.
-- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself. When there is no browser cache, use a Server Action.
+- A mutation that returns the entity's `id` and the changed fields updates the normalized cache by itself; `optimisticResponse` moves it before the server answers, and `useFragment` lets any component read the entity live. When there is no browser cache, use a Server Action, from a click or a `<form action>`, and let Next.js re-render the route.
 - `errorPolicy: "none"` narrows types; `error.tsx` catches thrown errors; suspense error recovery needs a refetch before `retry()`.
 - Next.js caching is decided per route and per fetch: `dynamic` for the rendering mode, `revalidate` at the segment or the fetch, `generateStaticParams` for known paths, and three invalidation APIs: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
