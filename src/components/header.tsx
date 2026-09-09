@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import logo from "@/assets/space_cat_logo.png";
 import { FavoritesCount } from "./favorites-count";
 import { PatternNav, PatternNavLinks } from "./pattern-nav";
+import { UserMenu, UserMenuFallback } from "./user-menu";
 import styles from "./header.module.css";
 
 /** Top navigation: home button plus the pattern switcher. Server Component. */
@@ -34,6 +35,10 @@ export function Header() {
           <PatternNav />
         </Suspense>
         <FavoritesCount />
+        {/* The session is request data too: the shell shows a link, the user streams in. */}
+        <Suspense fallback={<UserMenuFallback />}>
+          <UserMenu />
+        </Suspense>
       </div>
     </header>
   );

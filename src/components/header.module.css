@@ -58,3 +58,19 @@
   line-height: 0.8em;
   padding-left: 2px;
 }
+
+.account {
+  margin-left: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.account:hover {
+  background-color: var(--pink-lightest);
+  color: var(--pink-dark);
+}
