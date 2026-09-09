@@ -64,7 +64,17 @@ src/
     hooks/                     useMutation wrapper used by client patterns
     patterns.ts                single source of truth for routes and nav
     graphql-uri.ts             endpoint, shared by codegen and both clients
+    apollo/links.ts            ErrorLink -> RetryLink -> SetContextLink -> HttpLink, shared by both clients
+    apollo/cache.ts            InMemoryCache factory with the Track.isFavorite @client field policy
+    apollo/favorites.ts        reactive variable for favorites
+    apollo/not-found.ts        maps the API's upstream-404 GraphQL error to notFound()
+    search.ts                  parse searchParams, filter, paginate, build hrefs
+    hooks/use-debounced-callback.ts
   graphql/tracks.graphql       page-level operations
+  graphql/client-schema.graphql  client-only fields for codegen (`isFavorite`)
+  app/not-found.tsx            404 UI; error.tsx renders the same for 404s thrown in the browser
+  app/opengraph-image.tsx, manifest.ts, favicon.ico, apple-icon.png   metadata file conventions
+  app/rsc/(list)/              route group so the grid-skeleton loading.tsx scopes to the list only
   components/
     track-card.graphql         colocated fragment TrackCard_track
     track-detail.graphql       colocated fragment TrackDetail_track
@@ -85,6 +95,16 @@ src/
 **Forms.** One Zod schema (`src/lib/schemas/register-view.ts`) validates on both sides. `src/components/register-view-form.tsx` posts to a `"use server"` action through `useActionState`: the browser validates first and blocks invalid submits, the action validates again, runs the mutation with the RSC client, and calls `revalidatePath`, without which Next.js would not re-render the route (an action that revalidates nothing returns only its value). `useOptimistic` shows the expected count while the action is pending and yields to the re-rendered server value when it settles: React's equivalent of Apollo's `optimisticResponse`, for data that lives on the server instead of in the client cache. `src/components/register-view-client-form.tsx` is the all-client version: the same client validation, then `useMutation` with `optimisticResponse`, `useFragment` reading the `Track` entity live from the normalized cache, and typed errors (`CombinedGraphQLErrors.is`) from the hook. Pick by where the page's data lives: RSC pages post to a Server Action, client-cache pages mutate through Apollo so every reader updates in place.
 
 **Transitions.** `src/components/track-preview.tsx` changes a `useSuspenseQuery`'s variables inside `startTransition`, so the previous result stays on screen (dimmed via `isPending`) instead of the Suspense fallback; a checkbox turns the transition off to show the difference. `src/components/quick-view-button.tsx` calls a Server Action from a plain button inside an async transition and follows it with `router.refresh()`, so `isPending` covers the action and the RSC refresh. The card click, the preload refetch, and the error boundary retry use the same hook.
+
+**URL state versus component state.** `/rsc` keeps search and page in the query string: the Server Component reads `searchParams`, `SearchBox` rewrites the URL with a debounced `router.replace`, `Pagination` is plain links. Shareable, server-readable, works without JavaScript. `/suspense` filters the list already in the browser cache with component state and `useDeferredValue`, dimming stale results. Instant, but invisible to the server. Pick by who needs to know the state.
+
+**Streaming, skeletons, route groups, not found.** `/rsc/track/[trackId]` awaits only `params`; the detail and the "more tracks" strip are async Server Components in separate Suspense boundaries, so both queries run in parallel and stream behind content-shaped skeletons. The list lives in `src/app/rsc/(list)` so its grid-skeleton `loading.tsx` does not wrap the detail route. An unknown id is an HTTP 200 with a GraphQL error carrying the upstream 404 in `extensions.response`; `rethrowAsNotFound` turns it into `notFound()`. Trade-off: a Suspense boundary above a page sends the 200 shell before the page runs, so `notFound()` inside it renders in place; `/revalidate` sits outside any boundary and answers a real 404. There is no root `loading.tsx` for that reason.
+
+**Local state.** Favorites live in a reactive variable (`src/lib/apollo/favorites.ts`). `useReactiveVar` reads it directly (card button, header badge) and works on every pattern. `Track.isFavorite @client` is a field policy in `src/lib/apollo/cache.ts` that calls the variable, so fragments can select it and `useFragment` re-renders when it changes; that only works where the entity is in the browser cache. Codegen learns the field from `src/graphql/client-schema.graphql`.
+
+**Link chain.** Both clients use `createLinkChain`: `ErrorLink` observes, `RetryLink` retries transient failures on queries only (never mutations, GraphQL errors, or 4xx), `SetContextLink` is where a session token would be attached (the RSC client resolving it per request, the browser client from a cookie-backed session), `HttpLink` terminates. The browser client sets no custom headers because each would need CORS approval.
+
+**Metadata.** `metadataBase` from `NEXT_PUBLIC_SITE_URL`; icons, manifest, and Open Graph images are file conventions in `src/app`. `opengraph-image.tsx` renders with `next/og`; the per-track one is a Route Handler that queries GraphQL through the RSC client.
 
 **Effects.** `src/components/pattern-nav.tsx` measures the active link in `useLayoutEffect` to position a sliding indicator before the browser paints (a hidden-until-measured element makes a plain `useEffect` blink), and subscribes to `resize` in `useEffect` with cleanup. Nothing else in `src/` needs an effect: data is fetched with Suspense hooks or in Server Components, derived values are computed during render, and work caused by user input happens in the handler.
 

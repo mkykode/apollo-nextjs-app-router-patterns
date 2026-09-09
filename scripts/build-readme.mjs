@@ -1,5 +1,10 @@
-// Generates README.md from docs/tutorial.template.md, inlining the real source files so the
-// tutorial's code blocks cannot drift from the code. Run: pnpm docs:readme
+// Generates README.md from docs/tutorial.template.md. Run: pnpm docs:readme
+//
+// Template features:
+//   @@include(path)@@      inline a source file as a fenced code block, so code cannot drift
+//   ## Step: Title         steps are numbered in order of appearance
+//   @@step(Title)@@        resolves to "Step N" so prose can cross-reference steps by title
+//   @@contents@@           the numbered table of contents, with GitHub-style anchors
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const LANG = {
@@ -8,10 +13,42 @@ const LANG = {
 };
 const COMMENT = { ts: "//", tsx: "//", mts: "//", mjs: "//", css: "/*", graphql: "#", yaml: "#", yml: "#", example: "#" };
 
-const template = readFileSync("docs/tutorial.template.md", "utf8");
-const missing = [];
+const fail = (message) => {
+  console.error(message);
+  process.exit(1);
+};
 
-const readme = template.replace(/^@@include\((.+?)\)@@$/gm, (marker, path) => {
+/** GitHub's heading anchor: lowercase, drop punctuation, spaces to hyphens. */
+const slug = (heading) =>
+  heading.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+
+let text = readFileSync("docs/tutorial.template.md", "utf8");
+
+// 1. Number the steps.
+const titles = [];
+text = text.replace(/^## Step: (.+)$/gm, (_, title) => {
+  titles.push(title);
+  return `## Step ${titles.length}: ${title}`;
+});
+const numberOf = new Map(titles.map((title, index) => [title, index + 1]));
+
+// 2. Cross-references by title.
+text = text.replace(/@@step\((.+?)\)@@/g, (_, title) => {
+  const number = numberOf.get(title);
+  if (!number) fail(`Unknown step title in @@step()@@: ${title}`);
+  return `Step ${number}`;
+});
+
+// 3. Table of contents.
+const contents = titles
+  .map((title, index) => `${index + 1}. [${title}](#${slug(`Step ${index + 1}: ${title}`)})`)
+  .concat(text.includes("\n## What you learned") ? [`${titles.length + 1}. [What you learned](#what-you-learned)`] : [])
+  .join("\n");
+text = text.replace("@@contents@@", contents);
+
+// 4. Source includes.
+const missing = [];
+text = text.replace(/^@@include\((.+?)\)@@$/gm, (marker, path) => {
   if (!existsSync(path)) {
     missing.push(path);
     return marker;
@@ -21,14 +58,9 @@ const readme = template.replace(/^@@include\((.+?)\)@@$/gm, (marker, path) => {
   const comment = COMMENT[ext];
   const header =
     comment === undefined ? "" : comment === "/*" ? `/* ${path} */\n` : `${comment} ${path}\n`;
-  const body = readFileSync(path, "utf8").trimEnd();
-  return "```" + lang + "\n" + header + body + "\n```";
+  return "```" + lang + "\n" + header + readFileSync(path, "utf8").trimEnd() + "\n```";
 });
+if (missing.length > 0) fail(`Missing files referenced by the template: ${missing.join(", ")}`);
 
-if (missing.length > 0) {
-  console.error("Missing files referenced by the template:", missing);
-  process.exit(1);
-}
-
-writeFileSync("README.md", readme);
-console.log(`README.md written: ${readme.split("\n").length} lines`);
+writeFileSync("README.md", text);
+console.log(`README.md written: ${text.split("\n").length} lines, ${titles.length} steps`);
