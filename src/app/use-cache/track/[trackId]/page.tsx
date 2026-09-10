@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
 import { getCachedTrack } from "@/lib/data/tracks";
+import { tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/use-cache/track/[trackId]">;
 
@@ -35,8 +38,11 @@ export default async function CachedTrackPage({ params }: Props) {
   if (!track) notFound();
 
   return (
-    <PageContainer>
-      <TrackDetail track={track} />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("use-cache")}>All tracks</BackLink>
+        <TrackDetail track={track} />
+      </PageContainer>
+    </PageTransition>
   );
 }

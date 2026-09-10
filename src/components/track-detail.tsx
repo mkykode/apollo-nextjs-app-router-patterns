@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { ViewTransition } from "react";
 import type { TrackDetail_TrackFragment } from "@/__generated__/graphql";
 import { humanReadableTimeFromSeconds } from "@/lib/helpers";
 import { Button } from "./button";
@@ -10,23 +11,29 @@ import styles from "./track-detail.module.css";
 /**
  * Main content of a track: author, length, number of views, modules list, description.
  * Pure presentational Server Component; every pattern renders it with data from its own client.
+ *
+ * The cover carries the same <ViewTransition> name as the card's, so a navigation whose new
+ * page renders in the same commit (a prefetched static page) morphs the thumbnail into it. When
+ * the page suspends first, no pair forms and the cover simply arrives with its section.
  */
 export function TrackDetail({ track }: { track: TrackDetail_TrackFragment }) {
-  const { title, description, thumbnail, author, length, modulesCount, modules, numberOfViews } =
+  const { id, title, description, thumbnail, author, length, modulesCount, modules, numberOfViews } =
     track;
 
   return (
     <ContentSection>
       {thumbnail ? (
-        <Image
-          src={thumbnail}
-          alt=""
-          width={800}
-          height={400}
-          sizes="(min-width: 800px) 800px, 100vw"
-          className={styles.coverImage}
-          preload
-        />
+        <ViewTransition name={`track-cover-${id}`} share="morph" default="none">
+          <Image
+            src={thumbnail}
+            alt=""
+            width={800}
+            height={400}
+            sizes="(min-width: 800px) 800px, 100vw"
+            className={styles.coverImage}
+            preload
+          />
+        </ViewTransition>
       ) : null}
       <div className={styles.trackDetails}>
         <div className={styles.detailRow}>

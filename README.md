@@ -14,6 +14,7 @@ By the end you will be able to:
 - add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
+- animate navigations with React's `<ViewTransition>`: a shared-element morph, Suspense reveals, directional slides from transition types, and a same-route crossfade, and say why the morph only pairs on prefetched pages
 - tell the cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, `useEffectEvent` for the latest state inside a subscription, and no effect for everything else
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -749,9 +750,10 @@ import type { Route } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, useTransition } from "react";
+import { type MouseEvent, ViewTransition, useTransition } from "react";
 import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
 import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import { NAV_FORWARD } from "@/lib/navigation-types";
 import { FavoriteButton } from "./favorite-button";
 import styles from "./track-card.module.css";
 
@@ -780,6 +782,10 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * browser's default navigation and fire the mutation without waiting for it.
  * The favorite button sits next to the link, not inside it: a button inside an anchor is
  * invalid HTML and two click targets would fight.
+ *
+ * View transitions: the cover is a named <ViewTransition>, and TrackDetail names its cover
+ * the same way, so when the detail page renders in the navigation's commit the browser morphs
+ * one into the other. The push carries a transition type so the pages slide the right way.
  */
 export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps) {
   const { id, title, thumbnail, author, length, modulesCount } = track;
@@ -801,7 +807,7 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
     event.preventDefault();
     startTransition(async () => {
       await Promise.race([onOpen().catch(logOpenFailure), sleep(INCREMENT_WAIT_MS)]);
-      router.push(href);
+      router.push(href, { transitionTypes: [NAV_FORWARD] });
     });
   };
 
@@ -809,18 +815,21 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
     <article className={styles.card} aria-busy={isPending}>
       <Link href={href} className={styles.link} onClick={handleClick}>
         <div className={styles.content}>
-          <div className={styles.imageContainer}>
-            {thumbnail ? (
-              <Image
-                src={thumbnail}
-                alt={title}
-                fill
-                sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
-                className={styles.image}
-                loading={eager ? "eager" : "lazy"}
-              />
-            ) : null}
-          </div>
+          {/* The name must be unique on the page: the id makes it so, and the detail page reuses it. */}
+          <ViewTransition name={`track-cover-${id}`} share="morph" default="none">
+            <div className={styles.imageContainer}>
+              {thumbnail ? (
+                <Image
+                  src={thumbnail}
+                  alt={title}
+                  fill
+                  sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
+                  className={styles.image}
+                  loading={eager ? "eager" : "lazy"}
+                />
+              ) : null}
+            </div>
+          </ViewTransition>
           <div className={styles.body}>
             <h3 className={styles.title}>{title}</h3>
             <div className={styles.footer}>
@@ -1419,6 +1428,7 @@ Everything so far streams at request time. Cache Components cache at the functio
 import { cacheLife, cacheTag } from "next/cache";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { TrackGrid } from "@/components/track-grid";
 import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
 import { query } from "@/lib/apollo/rsc-client";
@@ -1429,6 +1439,10 @@ import { TRACKS_TAG } from "@/lib/cache-tags";
  * The directive caches this page's rendered output (the JSX, with the Server Action reference
  * inside it), so the whole route is part of the prerendered static shell and refreshes in the
  * background per the built-in "minutes" profile. The detail page shows the function-level form.
+ *
+ * Cached output is part of the static shell and prefetched whole, so a navigation between this
+ * list and a detail page renders the destination in the same commit: the directional slide
+ * plays and the card's cover morphs into the detail cover.
  */
 export default async function CachedTracksPage() {
   "use cache";
@@ -1438,13 +1452,15 @@ export default async function CachedTracksPage() {
   const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
 
   return (
-    <PageContainer grid>
-      <TrackGrid
-        tracks={data.tracksForHome}
-        pattern="use-cache"
-        onOpenTrack={incrementTrackViewsAndUpdateCache}
-      />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer grid>
+        <TrackGrid
+          tracks={data.tracksForHome}
+          pattern="use-cache"
+          onOpenTrack={incrementTrackViewsAndUpdateCache}
+        />
+      </PageContainer>
+    </PageTransition>
   );
 }
 ```
@@ -1509,10 +1525,13 @@ The detail page also exports `generateStaticParams`, which runs the list query o
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { TrackDetail } from "@/components/track-detail";
 import { query } from "@/lib/apollo/rsc-client";
 import { getCachedTrack } from "@/lib/data/tracks";
+import { tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/use-cache/track/[trackId]">;
 
@@ -1543,9 +1562,12 @@ export default async function CachedTrackPage({ params }: Props) {
   if (!track) notFound();
 
   return (
-    <PageContainer>
-      <TrackDetail track={track} />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("use-cache")}>All tracks</BackLink>
+        <TrackDetail track={track} />
+      </PageContainer>
+    </PageTransition>
   );
 }
 ```
@@ -1854,6 +1876,7 @@ export function Pagination({ pathname, page, totalPages, query }: PaginationProp
 import { Suspense } from "react";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { Pagination } from "@/components/pagination";
 import { SearchBox, SearchBoxFallback } from "@/components/search-box";
 import { TrackGrid } from "@/components/track-grid";
@@ -1883,17 +1906,19 @@ export default async function RscTracksPage({ searchParams }: PageProps<"/rsc">)
   const { items, page, totalPages } = paginate(matches, requestedPage);
 
   return (
-    <PageContainer grid>
-      <Suspense fallback={<SearchBoxFallback placeholder={PLACEHOLDER} />}>
-        <SearchBox placeholder={PLACEHOLDER} />
-      </Suspense>
-      {items.length > 0 ? (
-        <TrackGrid tracks={items} pattern="rsc" onOpenTrack={incrementTrackViews} />
-      ) : (
-        <p data-testid="no-results">No tracks match &ldquo;{search}&rdquo;.</p>
-      )}
-      <Pagination pathname="/rsc" page={page} totalPages={totalPages} query={search} />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer grid>
+        <Suspense fallback={<SearchBoxFallback placeholder={PLACEHOLDER} />}>
+          <SearchBox placeholder={PLACEHOLDER} />
+        </Suspense>
+        {items.length > 0 ? (
+          <TrackGrid tracks={items} pattern="rsc" onOpenTrack={incrementTrackViews} />
+        ) : (
+          <p data-testid="no-results">No tracks match &ldquo;{search}&rdquo;.</p>
+        )}
+        <Pagination pathname="/rsc" page={page} totalPages={totalPages} query={search} />
+      </PageContainer>
+    </PageTransition>
   );
 }
 ```
@@ -1904,7 +1929,7 @@ export default async function RscTracksPage({ searchParams }: PageProps<"/rsc">)
 // src/components/client-search.tsx
 "use client";
 
-import { type ReactNode, useDeferredValue, useState } from "react";
+import { type ReactNode, ViewTransition, useDeferredValue, useState } from "react";
 import { filterTracks } from "@/lib/search";
 import styles from "./search-box.module.css";
 
@@ -1920,6 +1945,11 @@ interface ClientSearchProps<T> {
  * (potentially expensive) filtered list re-renders at a lower priority; while the list still
  * shows results for the previous value it is marked stale and dimmed. Trade-off against
  * SearchBox: instant, but not shareable and invisible to the server.
+ *
+ * useDeferredValue is one of the three things that activate <ViewTransition> (with Transitions
+ * and Suspense). The results are keyed by the deferred query: when it changes, React deletes
+ * the old list and inserts the new one, pairs them by name, and the browser crossfades. That
+ * is the same-route pattern from the Next.js guide; the cost is that the cards remount.
  */
 export function ClientSearch<T extends { title: string; author: { name: string } }>({
   tracks,
@@ -1947,7 +1977,15 @@ export function ClientSearch<T extends { title: string; author: { name: string }
         />
       </div>
       <div className={styles.results} data-stale={isStale}>
-        {children(matches)}
+        <ViewTransition
+          key={deferredQuery}
+          name="track-results"
+          share="auto"
+          enter="auto"
+          default="none"
+        >
+          {children(matches)}
+        </ViewTransition>
       </div>
     </>
   );
@@ -2006,10 +2044,12 @@ Four App Router conventions, on the RSC detail page and its list.
 ```tsx
 // src/app/rsc/track/[trackId]/page.tsx
 import type { Metadata } from "next";
-import { Suspense } from "react";
+import { Suspense, ViewTransition } from "react";
 import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
 import { MoreTracks } from "@/components/more-tracks";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { QuickViewButton } from "@/components/quick-view-button";
 import { RegisterViewForm } from "@/components/register-view-form";
 import { SignInPrompt } from "@/components/sign-in-prompt";
@@ -2018,7 +2058,7 @@ import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
 import { auth } from "@/lib/auth/auth";
-import { trackHref } from "@/lib/patterns";
+import { trackHref, tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
 
@@ -2043,19 +2083,44 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  * The page itself awaits nothing but params. Each section is an async Server Component in
  * its own Suspense boundary, so the two queries start in parallel and each streams in
  * behind a skeleton shaped like the content, whichever finishes first.
+ *
+ * Each reveal is animated: the fallback's <ViewTransition> exits downwards and the content's
+ * enters from below. They are two boundaries, not one around the Suspense, so React treats
+ * the swap as exit plus enter rather than a crossfade of one snapshot. Because this page
+ * suspends before its cover renders, the card-to-cover morph never pairs here; it does on
+ * the prefetched /revalidate pages.
  */
 export default async function RscTrackPage({ params }: Props) {
   const { trackId } = await params;
 
   return (
-    <PageContainer>
-      <Suspense fallback={<TrackDetailSkeleton />}>
-        <TrackSection trackId={trackId} />
-      </Suspense>
-      <Suspense fallback={<MoreTracksSkeleton />}>
-        <MoreTracksSection currentTrackId={trackId} />
-      </Suspense>
-    </PageContainer>
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("rsc")}>All tracks</BackLink>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <TrackDetailSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <TrackSection trackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <MoreTracksSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <MoreTracksSection currentTrackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+      </PageContainer>
+    </PageTransition>
   );
 }
 
@@ -2732,6 +2797,408 @@ export function QuickViewButton({ trackId }: { trackId: string }) {
 Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 **Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
+
+## Step: View transitions: continuity between pages
+
+A route change replaces the whole page at once. Nothing on screen says that the thumbnail you clicked and the cover you are now looking at are the same image. React's `<ViewTransition>` drives the browser's View Transitions API declaratively: you name what should persist, or describe how a subtree enters and exits, and React calls `document.startViewTransition` itself. Only Transitions, Suspense, and `useDeferredValue` activate it; App Router navigations are transitions, so most of this works from navigation alone.
+
+Two facts about the API before the code. Inside Next.js, `ViewTransition` is a plain export of `react`, because the App Router bundles React's canary channel: no flag, nothing to install. The npm `react` package and `@types/react` still keep it behind the canary entry, so one file references those types and the test setup gives Vitest a pass-through version. Without browser support nothing breaks: the app works and the animations do not play.
+
+```ts
+// src/types/react-canary.d.ts
+/**
+ * Next.js bundles React's canary channel, where <ViewTransition> and addTransitionType are
+ * plain exports of "react". The npm `react` package and `@types/react` still keep their types
+ * behind the canary entry, so this reference (needed once, anywhere in the project) adds them.
+ */
+/// <reference types="react/canary" />
+```
+
+```ts
+// vitest.setup.ts
+import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, vi } from "vitest";
+
+// Next.js bundles React's canary channel, where <ViewTransition> is an export of "react". The
+// npm package Vitest resolves (19.2) does not ship it, so components that animate in the app
+// would render an undefined element type here. Every other export stays the real one.
+vi.mock("react", async (importOriginal) => {
+  const react = await importOriginal<Record<string, unknown>>();
+  if ("ViewTransition" in react) return react;
+  return { ...react, ViewTransition: ({ children }: { children?: ReactNode }) => children };
+});
+
+afterEach(cleanup);
+```
+
+The Next.js guide has four patterns. Each lands where it fits this app.
+
+**Shared element: the card cover morphs into the detail cover.** `TrackCard` and `TrackDetail` wrap their image in a `<ViewTransition>` with the same `name`, unique per track. When the destination page renders in the navigation's commit, React pairs the two and the browser animates size and position from one to the other. `share="morph"` names the class the CSS customizes; `default="none"` keeps the named image from crossfading on every unrelated transition. Keep the explicit `share` when you add `default="none"`, or the pair silently stops morphing.
+
+```tsx
+// src/components/track-card.tsx
+"use client";
+
+import type { Route } from "next";
+import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { type MouseEvent, ViewTransition, useTransition } from "react";
+import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
+import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import { NAV_FORWARD } from "@/lib/navigation-types";
+import { FavoriteButton } from "./favorite-button";
+import styles from "./track-card.module.css";
+
+interface TrackCardProps {
+  track: TrackCard_TrackFragment;
+  href: Route;
+  /** Increments the view count; the caller decides whether that is useMutation or a Server Action. */
+  onOpen: () => Promise<unknown>;
+  /** Load the thumbnail eagerly (above-the-fold cards). */
+  eager?: boolean;
+}
+
+const logOpenFailure = (error: unknown) =>
+  console.error("Could not increment the track's view count", error);
+
+/** Upper bound on how long navigation waits for the increment; the request itself keeps running. */
+const INCREMENT_WAIT_MS = 2000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Card for the track grid. Client Component only because of the click handler.
+ *
+ * The increment is awaited (bounded by INCREMENT_WAIT_MS) before navigating so the detail
+ * page does not render a count that is stale by one. Modifier clicks (new tab) keep the
+ * browser's default navigation and fire the mutation without waiting for it.
+ * The favorite button sits next to the link, not inside it: a button inside an anchor is
+ * invalid HTML and two click targets would fight.
+ *
+ * View transitions: the cover is a named <ViewTransition>, and TrackDetail names its cover
+ * the same way, so when the detail page renders in the navigation's commit the browser morphs
+ * one into the other. The push carries a transition type so the pages slide the right way.
+ */
+export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps) {
+  const { id, title, thumbnail, author, length, modulesCount } = track;
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isPending) {
+      // One increment per open: ignore clicks while the previous one is in flight.
+      event.preventDefault();
+      return;
+    }
+    const opensElsewhere =
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+    if (opensElsewhere) {
+      void onOpen().catch(logOpenFailure);
+      return;
+    }
+    event.preventDefault();
+    startTransition(async () => {
+      await Promise.race([onOpen().catch(logOpenFailure), sleep(INCREMENT_WAIT_MS)]);
+      router.push(href, { transitionTypes: [NAV_FORWARD] });
+    });
+  };
+
+  return (
+    <article className={styles.card} aria-busy={isPending}>
+      <Link href={href} className={styles.link} onClick={handleClick}>
+        <div className={styles.content}>
+          {/* The name must be unique on the page: the id makes it so, and the detail page reuses it. */}
+          <ViewTransition name={`track-cover-${id}`} share="morph" default="none">
+            <div className={styles.imageContainer}>
+              {thumbnail ? (
+                <Image
+                  src={thumbnail}
+                  alt={title}
+                  fill
+                  sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
+                  className={styles.image}
+                  loading={eager ? "eager" : "lazy"}
+                />
+              ) : null}
+            </div>
+          </ViewTransition>
+          <div className={styles.body}>
+            <h3 className={styles.title}>{title}</h3>
+            <div className={styles.footer}>
+              {author.photo ? (
+                <Image
+                  src={author.photo}
+                  alt=""
+                  width={30}
+                  height={30}
+                  className={styles.authorImage}
+                />
+              ) : null}
+              <div className={styles.authorAndTrack}>
+                <div className={styles.authorName}>{author.name}</div>
+                <div className={styles.trackLength}>
+                  {modulesCount ?? 0} modules - {humanReadableTimeFromSeconds(length ?? 0)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Link>
+      <FavoriteButton trackId={id} title={title} />
+    </article>
+  );
+}
+```
+
+Where the pair forms is a caching question, which is why this step belongs in this tutorial. `/use-cache` pages are cached output inside the static shell and prefetched whole, so the detail renders in the same commit and the morph plays. `/rsc/track/[trackId]` suspends into its skeleton first, so no pair forms and the cover arrives with its section's enter animation. `/suspense` behaves the same way, for an Apollo reason: `GetTrack` selects fields the list query did not fetch, so `useSuspenseQuery` suspends. A cache that already held every field would render in the commit and morph.
+
+**Suspense reveal: the skeleton leaves, the content arrives.** On the RSC detail page each fallback gets an exit class and each section an enter class. Two boundaries rather than one around the `<Suspense>` make the swap an exit plus an enter instead of a crossfade of one snapshot.
+
+Where the boundary sits decides which reveal you can animate. On this branch a `loading.tsx` sits above this page, because Cache Components needs a boundary over its request-time reads, so a navigation shows that fallback first and the page usually lands with its sections already resolved: the reveal is one untyped transition, a plain crossfade, and the inner exit and enter classes only get to play when the API is slower than the page. The `dynamic` branch has no boundary above this page; there the navigation commits the page with its skeletons and each section's reveal animates on its own.
+
+```tsx
+// src/app/rsc/track/[trackId]/page.tsx
+import type { Metadata } from "next";
+import { Suspense, ViewTransition } from "react";
+import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
+import { MoreTracks } from "@/components/more-tracks";
+import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
+import { QuickViewButton } from "@/components/quick-view-button";
+import { RegisterViewForm } from "@/components/register-view-form";
+import { SignInPrompt } from "@/components/sign-in-prompt";
+import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons";
+import { TrackDetail } from "@/components/track-detail";
+import { rethrowAsNotFound } from "@/lib/apollo/not-found";
+import { query } from "@/lib/apollo/rsc-client";
+import { auth } from "@/lib/auth/auth";
+import { trackHref, tracksHref } from "@/lib/patterns";
+
+type Props = PageProps<"/rsc/track/[trackId]">;
+
+/** Unknown ids become a 404 page instead of an error boundary. */
+const getTrack = (trackId: string) =>
+  query({ query: GetTrackDocument, variables: { trackId }, errorPolicy: "none" }).catch(
+    rethrowAsNotFound,
+  );
+
+/**
+ * generateMetadata and the page both run GetTrack. Because registerApolloClient shares
+ * one client per request, the second call is served from that client's cache:
+ * one network request, not two. Only RSC data can drive metadata like this.
+ */
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { trackId } = await params;
+  const { data } = await getTrack(trackId);
+  return { title: data.track.title };
+}
+
+/**
+ * The page itself awaits nothing but params. Each section is an async Server Component in
+ * its own Suspense boundary, so the two queries start in parallel and each streams in
+ * behind a skeleton shaped like the content, whichever finishes first.
+ *
+ * Each reveal is animated: the fallback's <ViewTransition> exits downwards and the content's
+ * enters from below. They are two boundaries, not one around the Suspense, so React treats
+ * the swap as exit plus enter rather than a crossfade of one snapshot. Because this page
+ * suspends before its cover renders, the card-to-cover morph never pairs here; it does on
+ * the prefetched /revalidate pages.
+ */
+export default async function RscTrackPage({ params }: Props) {
+  const { trackId } = await params;
+
+  return (
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("rsc")}>All tracks</BackLink>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <TrackDetailSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <TrackSection trackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <MoreTracksSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <MoreTracksSection currentTrackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+      </PageContainer>
+    </PageTransition>
+  );
+}
+
+/**
+ * The session is read next to the data, inside the boundary, so the request-time cookie read
+ * never blocks the shell. Signed out, the form gives way to a sign-in link; the action would
+ * refuse anyway, so this is a courtesy, not the check.
+ */
+async function TrackSection({ trackId }: { trackId: string }) {
+  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
+  return (
+    <>
+      <TrackDetail track={data.track} />
+      <QuickViewButton trackId={trackId} />
+      {session?.user ? (
+        <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
+      ) : (
+        <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />
+      )}
+    </>
+  );
+}
+
+async function MoreTracksSection({ currentTrackId }: { currentTrackId: string }) {
+  const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
+  const others = data.tracksForHome.filter(({ id }) => id !== currentTrackId).slice(0, 4);
+  return <MoreTracks tracks={others} href={(id) => trackHref("rsc", id)} />;
+}
+```
+
+**Directional navigation: transition types.** A type tags a navigation with its meaning. The card attaches `nav-forward` in `router.push`, the back link attaches `nav-back` through `<Link transitionTypes>`, and a wrapper on each participating page maps the types to classes. Browser back and forward, `router.refresh()`, and Suspense reveals carry no type and fall through to `default: "none"`. The wrapper goes in the page, not the layout, because layouts persist across navigations, so enter and exit never fire there.
+
+```ts
+// src/lib/navigation-types.ts
+/**
+ * Transition types tag a navigation with its meaning, so a <ViewTransition> can pick the
+ * animation: forward slides the new page in from the right, back from the left. Next.js passes
+ * them to React's addTransitionType; `<Link transitionTypes>` and `router.push(href,
+ * { transitionTypes })` are the two ways to attach them. Browser back and forward carry none.
+ */
+export const NAV_FORWARD = "nav-forward";
+export const NAV_BACK = "nav-back";
+```
+
+```tsx
+// src/components/page-transition.tsx
+import { type ReactNode, ViewTransition } from "react";
+import { NAV_BACK, NAV_FORWARD } from "@/lib/navigation-types";
+
+/** Transition type to view transition class; anything untyped (browser back, refresh) does nothing. */
+const BY_TYPE = { [NAV_FORWARD]: "nav-forward", [NAV_BACK]: "nav-back", default: "none" };
+
+/**
+ * Directional page animation. The old page slides out and the new one slides in, left for
+ * forward and right for back, with the CSS in globals.css. Two placement rules from React:
+ * wrap the page's root, not the layout (layouts persist across navigations, so enter and exit
+ * never fire there), and put nothing between the <ViewTransition> and the top of the page,
+ * because enter and exit only activate when no DOM node sits above the boundary.
+ */
+export function PageTransition({ children }: { children: ReactNode }) {
+  return (
+    <ViewTransition enter={BY_TYPE} exit={BY_TYPE} default="none">
+      {children}
+    </ViewTransition>
+  );
+}
+```
+
+```tsx
+// src/components/back-link.tsx
+import type { Route } from "next";
+import Link from "next/link";
+import type { ReactNode } from "react";
+import { NAV_BACK } from "@/lib/navigation-types";
+import styles from "./back-link.module.css";
+
+/** Returns to a list. The transition type makes the pages slide the other way than a card click. */
+export function BackLink({ href, children }: { href: Route; children: ReactNode }) {
+  return (
+    <Link href={href} className={styles.link} transitionTypes={[NAV_BACK]}>
+      {children}
+    </Link>
+  );
+}
+```
+
+The header gets a `viewTransitionName` and CSS that pins it, so it stays put while the page slides. One fixed reference is what tells the eye that the content moved, not the viewport.
+
+**Same place, different content: a keyed crossfade.** The client search on `/suspense` keys its results by the deferred query and names them. When the key changes, React deletes the old list and inserts the new one, pairs them by name, and the browser crossfades. `useDeferredValue` is what activates it; no navigation is involved. The cards remount on every change, which is the cost of keying. An `update` class on an unkeyed wrapper would crossfade one snapshot and keep the instances.
+
+```tsx
+// src/components/client-search.tsx
+"use client";
+
+import { type ReactNode, ViewTransition, useDeferredValue, useState } from "react";
+import { filterTracks } from "@/lib/search";
+import styles from "./search-box.module.css";
+
+interface ClientSearchProps<T> {
+  tracks: readonly T[];
+  placeholder: string;
+  children: (matches: readonly T[]) => ReactNode;
+}
+
+/**
+ * Component state instead of URL state: the list is already in the browser, so filtering
+ * needs no navigation. useDeferredValue lets the input update on every keystroke while the
+ * (potentially expensive) filtered list re-renders at a lower priority; while the list still
+ * shows results for the previous value it is marked stale and dimmed. Trade-off against
+ * SearchBox: instant, but not shareable and invisible to the server.
+ *
+ * useDeferredValue is one of the three things that activate <ViewTransition> (with Transitions
+ * and Suspense). The results are keyed by the deferred query: when it changes, React deletes
+ * the old list and inserts the new one, pairs them by name, and the browser crossfades. That
+ * is the same-route pattern from the Next.js guide; the cost is that the cards remount.
+ */
+export function ClientSearch<T extends { title: string; author: { name: string } }>({
+  tracks,
+  placeholder,
+  children,
+}: ClientSearchProps<T>) {
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const matches = filterTracks(tracks, deferredQuery);
+  const isStale = query !== deferredQuery;
+
+  return (
+    <>
+      <div className={styles.box}>
+        <label htmlFor="client-track-search" className={styles.srOnly}>
+          Filter tracks
+        </label>
+        <input
+          id="client-track-search"
+          type="search"
+          className={styles.input}
+          placeholder={placeholder}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+      <div className={styles.results} data-stale={isStale}>
+        <ViewTransition
+          key={deferredQuery}
+          name="track-results"
+          share="auto"
+          enter="auto"
+          default="none"
+        >
+          {children(matches)}
+        </ViewTransition>
+      </div>
+    </>
+  );
+}
+```
+
+All the motion is CSS, in the view-transitions section at the end of `src/app/globals.css`, keyed by the classes the components name. Old content leaves fast and new content arrives more gently, the `::view-transition` overlay lets clicks through, and `prefers-reduced-motion` zeroes every duration.
+
+**Check:** on http://localhost:3000/use-cache click a card: the cover grows into the detail cover while the page slides left. Click **All tracks**: the page slides right and the cover shrinks back into its card. On http://localhost:3000/rsc click a card: the page slides in showing the route's loading skeleton, the content crossfades over it, and the cover does not morph. On http://localhost:3000/suspense type in the filter box: the results crossfade. Press the browser's back button anywhere: no slide, the browser navigation carries no type. Enable **Emulate CSS media feature prefers-reduced-motion** in DevTools and everything snaps. `e2e/view-transitions.spec.ts` records every `document.startViewTransition` call with its types and, with the durations stretched by an injected stylesheet, catches the running animations by name: `vt-blur` proves the morph pair formed on `/use-cache`; on `/rsc` it checks the slide and the second, untyped transition of the reveal.
 
 ## Step: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
@@ -4015,7 +4482,17 @@ export default defineConfig({
 // vitest.setup.ts
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import type { ReactNode } from "react";
+import { afterEach, vi } from "vitest";
+
+// Next.js bundles React's canary channel, where <ViewTransition> is an export of "react". The
+// npm package Vitest resolves (19.2) does not ship it, so components that animate in the app
+// would render an undefined element type here. Every other export stays the real one.
+vi.mock("react", async (importOriginal) => {
+  const react = await importOriginal<Record<string, unknown>>();
+  if ("ViewTransition" in react) return react;
+  return { ...react, ViewTransition: ({ children }: { children?: ReactNode }) => children };
+});
 
 afterEach(cleanup);
 ```
@@ -4127,7 +4604,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 25 files, 85 tests
-pnpm test:e2e         # builds, starts the server, 36 tests
+pnpm test:e2e         # builds, starts the server, 39 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 

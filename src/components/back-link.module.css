@@ -1,0 +1,11 @@
+.link {
+  display: inline-block;
+  margin-bottom: 20px;
+  font-weight: 600;
+  color: var(--pink-darker);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}

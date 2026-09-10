@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useDeferredValue, useState } from "react";
+import { type ReactNode, ViewTransition, useDeferredValue, useState } from "react";
 import { filterTracks } from "@/lib/search";
 import styles from "./search-box.module.css";
 
@@ -16,6 +16,11 @@ interface ClientSearchProps<T> {
  * (potentially expensive) filtered list re-renders at a lower priority; while the list still
  * shows results for the previous value it is marked stale and dimmed. Trade-off against
  * SearchBox: instant, but not shareable and invisible to the server.
+ *
+ * useDeferredValue is one of the three things that activate <ViewTransition> (with Transitions
+ * and Suspense). The results are keyed by the deferred query: when it changes, React deletes
+ * the old list and inserts the new one, pairs them by name, and the browser crossfades. That
+ * is the same-route pattern from the Next.js guide; the cost is that the cards remount.
  */
 export function ClientSearch<T extends { title: string; author: { name: string } }>({
   tracks,
@@ -43,7 +48,15 @@ export function ClientSearch<T extends { title: string; author: { name: string }
         />
       </div>
       <div className={styles.results} data-stale={isStale}>
-        {children(matches)}
+        <ViewTransition
+          key={deferredQuery}
+          name="track-results"
+          share="auto"
+          enter="auto"
+          default="none"
+        >
+          {children(matches)}
+        </ViewTransition>
       </div>
     </>
   );

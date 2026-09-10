@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
+import { NAV_FORWARD } from "@/lib/navigation-types";
 import { trackHref } from "@/lib/patterns";
 import { TrackCard } from "./track-card";
 
@@ -24,6 +25,7 @@ const track: TrackCard_TrackFragment = {
 };
 
 const href = trackHref("rsc", track.id);
+const FORWARD = { transitionTypes: [NAV_FORWARD] };
 
 /** A promise the test resolves by hand, to observe ordering. */
 function deferred() {
@@ -64,7 +66,7 @@ describe("TrackCard", () => {
 
     increment.resolve();
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith(href));
+    await waitFor(() => expect(push).toHaveBeenCalledWith(href, FORWARD));
   });
 
   it("ignores clicks while an increment is in flight", async () => {
@@ -93,7 +95,7 @@ describe("TrackCard", () => {
       expect(push).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(() => expect(push).toHaveBeenCalledWith(href));
+      await vi.waitFor(() => expect(push).toHaveBeenCalledWith(href, FORWARD));
     } finally {
       vi.useRealTimers();
     }
@@ -108,7 +110,7 @@ describe("TrackCard", () => {
 
     fireEvent.click(screen.getByRole("link"));
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith(href));
+    await waitFor(() => expect(push).toHaveBeenCalledWith(href, FORWARD));
     expect(consoleError).toHaveBeenCalledWith(
       "Could not increment the track's view count",
       expect.any(Error),

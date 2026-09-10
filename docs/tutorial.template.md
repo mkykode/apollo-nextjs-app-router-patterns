@@ -14,6 +14,7 @@ By the end you will be able to:
 - add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
+- animate navigations with React's `<ViewTransition>`: a shared-element morph, Suspense reveals, directional slides from transition types, and a same-route crossfade, and say why the morph only pairs on prefetched pages
 - tell the cases apart: `useLayoutEffect` for DOM measurement, `useEffect` for external subscriptions, `useEffectEvent` for the latest state inside a subscription, and no effect for everything else
 - handle errors, loading, and a trap in suspense error recovery
 - test all of it with Vitest, Apollo's `MockedProvider`, and Playwright
@@ -581,6 +582,48 @@ Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`.
 
 **Check:** on http://localhost:3000/suspense/track/c_0, throttle the network in DevTools, then change the preview select. The old preview dims and stays until the new one lands. Untick the checkbox and change it again: the "Loading preview..." fallback flashes instead. On http://localhost:3000/rsc/track/c_0, click **Quick +1 view**: the button shows its pending label, the Network tab shows the `next-action` POST followed by the RSC refresh, and the count in the details box changes. `e2e/transitions.spec.ts` proves both, slowing GraphQL down with `page.route` so the pending state is observable.
 
+## Step: View transitions: continuity between pages
+
+A route change replaces the whole page at once. Nothing on screen says that the thumbnail you clicked and the cover you are now looking at are the same image. React's `<ViewTransition>` drives the browser's View Transitions API declaratively: you name what should persist, or describe how a subtree enters and exits, and React calls `document.startViewTransition` itself. Only Transitions, Suspense, and `useDeferredValue` activate it; App Router navigations are transitions, so most of this works from navigation alone.
+
+Two facts about the API before the code. Inside Next.js, `ViewTransition` is a plain export of `react`, because the App Router bundles React's canary channel: no flag, nothing to install. The npm `react` package and `@types/react` still keep it behind the canary entry, so one file references those types and the test setup gives Vitest a pass-through version. Without browser support nothing breaks: the app works and the animations do not play.
+
+@@include(src/types/react-canary.d.ts)@@
+
+@@include(vitest.setup.ts)@@
+
+The Next.js guide has four patterns. Each lands where it fits this app.
+
+**Shared element: the card cover morphs into the detail cover.** `TrackCard` and `TrackDetail` wrap their image in a `<ViewTransition>` with the same `name`, unique per track. When the destination page renders in the navigation's commit, React pairs the two and the browser animates size and position from one to the other. `share="morph"` names the class the CSS customizes; `default="none"` keeps the named image from crossfading on every unrelated transition. Keep the explicit `share` when you add `default="none"`, or the pair silently stops morphing.
+
+@@include(src/components/track-card.tsx)@@
+
+Where the pair forms is a caching question, which is why this step belongs in this tutorial. `/use-cache` pages are cached output inside the static shell and prefetched whole, so the detail renders in the same commit and the morph plays. `/rsc/track/[trackId]` suspends into its skeleton first, so no pair forms and the cover arrives with its section's enter animation. `/suspense` behaves the same way, for an Apollo reason: `GetTrack` selects fields the list query did not fetch, so `useSuspenseQuery` suspends. A cache that already held every field would render in the commit and morph.
+
+**Suspense reveal: the skeleton leaves, the content arrives.** On the RSC detail page each fallback gets an exit class and each section an enter class. Two boundaries rather than one around the `<Suspense>` make the swap an exit plus an enter instead of a crossfade of one snapshot.
+
+Where the boundary sits decides which reveal you can animate. On this branch a `loading.tsx` sits above this page, because Cache Components needs a boundary over its request-time reads, so a navigation shows that fallback first and the page usually lands with its sections already resolved: the reveal is one untyped transition, a plain crossfade, and the inner exit and enter classes only get to play when the API is slower than the page. The `dynamic` branch has no boundary above this page; there the navigation commits the page with its skeletons and each section's reveal animates on its own.
+
+@@include(src/app/rsc/track/[trackId]/page.tsx)@@
+
+**Directional navigation: transition types.** A type tags a navigation with its meaning. The card attaches `nav-forward` in `router.push`, the back link attaches `nav-back` through `<Link transitionTypes>`, and a wrapper on each participating page maps the types to classes. Browser back and forward, `router.refresh()`, and Suspense reveals carry no type and fall through to `default: "none"`. The wrapper goes in the page, not the layout, because layouts persist across navigations, so enter and exit never fire there.
+
+@@include(src/lib/navigation-types.ts)@@
+
+@@include(src/components/page-transition.tsx)@@
+
+@@include(src/components/back-link.tsx)@@
+
+The header gets a `viewTransitionName` and CSS that pins it, so it stays put while the page slides. One fixed reference is what tells the eye that the content moved, not the viewport.
+
+**Same place, different content: a keyed crossfade.** The client search on `/suspense` keys its results by the deferred query and names them. When the key changes, React deletes the old list and inserts the new one, pairs them by name, and the browser crossfades. `useDeferredValue` is what activates it; no navigation is involved. The cards remount on every change, which is the cost of keying. An `update` class on an unkeyed wrapper would crossfade one snapshot and keep the instances.
+
+@@include(src/components/client-search.tsx)@@
+
+All the motion is CSS, in the view-transitions section at the end of `src/app/globals.css`, keyed by the classes the components name. Old content leaves fast and new content arrives more gently, the `::view-transition` overlay lets clicks through, and `prefers-reduced-motion` zeroes every duration.
+
+**Check:** on http://localhost:3000/use-cache click a card: the cover grows into the detail cover while the page slides left. Click **All tracks**: the page slides right and the cover shrinks back into its card. On http://localhost:3000/rsc click a card: the page slides in showing the route's loading skeleton, the content crossfades over it, and the cover does not morph. On http://localhost:3000/suspense type in the filter box: the results crossfade. Press the browser's back button anywhere: no slide, the browser navigation carries no type. Enable **Emulate CSS media feature prefers-reduced-motion** in DevTools and everything snaps. `e2e/view-transitions.spec.ts` records every `document.startViewTransition` call with its types and, with the durations stretched by an injected stylesheet, catches the running animations by name: `vt-blur` proves the morph pair formed on `/use-cache`; on `/rsc` it checks the slide and the second, untyped transition of the reveal.
+
 ## Step: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
 Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the cases that do, keep the reactive part of an effect apart from the part that only needs the latest values, and recognize the cases that do not need an effect at all.
@@ -766,7 +809,7 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 
 ```sh
 pnpm vitest run       # 25 files, 85 tests
-pnpm test:e2e         # builds, starts the server, 36 tests
+pnpm test:e2e         # builds, starts the server, 39 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
