@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
-import { Suspense } from "react";
+import { Suspense, ViewTransition } from "react";
 import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
 import { MoreTracks } from "@/components/more-tracks";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { QuickViewButton } from "@/components/quick-view-button";
 import { RegisterViewForm } from "@/components/register-view-form";
 import { SignInPrompt } from "@/components/sign-in-prompt";
@@ -11,7 +13,7 @@ import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
 import { auth } from "@/lib/auth/auth";
-import { trackHref } from "@/lib/patterns";
+import { trackHref, tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
 
@@ -36,19 +38,44 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
  * The page itself awaits nothing but params. Each section is an async Server Component in
  * its own Suspense boundary, so the two queries start in parallel and each streams in
  * behind a skeleton shaped like the content, whichever finishes first.
+ *
+ * Each reveal is animated: the fallback's <ViewTransition> exits downwards and the content's
+ * enters from below. They are two boundaries, not one around the Suspense, so React treats
+ * the swap as exit plus enter rather than a crossfade of one snapshot. Because this page
+ * suspends before its cover renders, the card-to-cover morph never pairs here; it does on
+ * the prefetched /revalidate pages.
  */
 export default async function RscTrackPage({ params }: Props) {
   const { trackId } = await params;
 
   return (
-    <PageContainer>
-      <Suspense fallback={<TrackDetailSkeleton />}>
-        <TrackSection trackId={trackId} />
-      </Suspense>
-      <Suspense fallback={<MoreTracksSkeleton />}>
-        <MoreTracksSection currentTrackId={trackId} />
-      </Suspense>
-    </PageContainer>
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("rsc")}>All tracks</BackLink>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <TrackDetailSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <TrackSection trackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+        <Suspense
+          fallback={
+            <ViewTransition exit="slide-down" default="none">
+              <MoreTracksSkeleton />
+            </ViewTransition>
+          }
+        >
+          <ViewTransition enter="slide-up" default="none">
+            <MoreTracksSection currentTrackId={trackId} />
+          </ViewTransition>
+        </Suspense>
+      </PageContainer>
+    </PageTransition>
   );
 }
 

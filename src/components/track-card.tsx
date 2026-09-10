@@ -4,9 +4,10 @@ import type { Route } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, useTransition } from "react";
+import { type MouseEvent, ViewTransition, useTransition } from "react";
 import type { TrackCard_TrackFragment } from "@/__generated__/graphql";
 import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import { NAV_FORWARD } from "@/lib/navigation-types";
 import { FavoriteButton } from "./favorite-button";
 import styles from "./track-card.module.css";
 
@@ -35,6 +36,10 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * browser's default navigation and fire the mutation without waiting for it.
  * The favorite button sits next to the link, not inside it: a button inside an anchor is
  * invalid HTML and two click targets would fight.
+ *
+ * View transitions: the cover is a named <ViewTransition>, and TrackDetail names its cover
+ * the same way, so when the detail page renders in the navigation's commit the browser morphs
+ * one into the other. The push carries a transition type so the pages slide the right way.
  */
 export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps) {
   const { id, title, thumbnail, author, length, modulesCount } = track;
@@ -56,7 +61,7 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
     event.preventDefault();
     startTransition(async () => {
       await Promise.race([onOpen().catch(logOpenFailure), sleep(INCREMENT_WAIT_MS)]);
-      router.push(href);
+      router.push(href, { transitionTypes: [NAV_FORWARD] });
     });
   };
 
@@ -64,18 +69,21 @@ export function TrackCard({ track, href, onOpen, eager = false }: TrackCardProps
     <article className={styles.card} aria-busy={isPending}>
       <Link href={href} className={styles.link} onClick={handleClick}>
         <div className={styles.content}>
-          <div className={styles.imageContainer}>
-            {thumbnail ? (
-              <Image
-                src={thumbnail}
-                alt={title}
-                fill
-                sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
-                className={styles.image}
-                loading={eager ? "eager" : "lazy"}
-              />
-            ) : null}
-          </div>
+          {/* The name must be unique on the page: the id makes it so, and the detail page reuses it. */}
+          <ViewTransition name={`track-cover-${id}`} share="morph" default="none">
+            <div className={styles.imageContainer}>
+              {thumbnail ? (
+                <Image
+                  src={thumbnail}
+                  alt={title}
+                  fill
+                  sizes="(min-width: 992px) 340px, (min-width: 768px) 50vw, 90vw"
+                  className={styles.image}
+                  loading={eager ? "eager" : "lazy"}
+                />
+              ) : null}
+            </div>
+          </ViewTransition>
           <div className={styles.body}>
             <h3 className={styles.title}>{title}</h3>
             <div className={styles.footer}>

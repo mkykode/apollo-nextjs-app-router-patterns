@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { BackLink } from "@/components/back-link";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
 import { trackTag } from "@/lib/cache-tags";
+import { tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/revalidate/track/[trackId]">;
 
@@ -44,8 +47,11 @@ export default async function CachedTrackPage({ params }: Props) {
   const { data } = await getTrack(trackId);
 
   return (
-    <PageContainer>
-      <TrackDetail track={data.track} />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer>
+        <BackLink href={tracksHref("revalidate")}>All tracks</BackLink>
+        <TrackDetail track={data.track} />
+      </PageContainer>
+    </PageTransition>
   );
 }

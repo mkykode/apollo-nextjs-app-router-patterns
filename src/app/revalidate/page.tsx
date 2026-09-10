@@ -1,5 +1,6 @@
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { TrackGrid } from "@/components/track-grid";
 import { incrementTrackViewsAndUpdateCache } from "@/lib/actions/increment-track-views";
 import { query } from "@/lib/apollo/rsc-client";
@@ -16,17 +17,23 @@ export const revalidate = 60;
  * Same client and query as /rsc, but nothing here is fetched per request. This list page is
  * cached at the segment level (above); the detail page caches at the fetch level with tags.
  * A click runs a Server Action that invalidates both, so the next render is fresh.
+ *
+ * Static pages are prefetched whole, so a navigation between this list and a detail page
+ * renders the destination in the same commit: the directional slide plays and the card's
+ * cover morphs into the detail cover.
  */
 export default async function CachedTracksPage() {
   const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
 
   return (
-    <PageContainer grid>
-      <TrackGrid
-        tracks={data.tracksForHome}
-        pattern="revalidate"
-        onOpenTrack={incrementTrackViewsAndUpdateCache}
-      />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer grid>
+        <TrackGrid
+          tracks={data.tracksForHome}
+          pattern="revalidate"
+          onOpenTrack={incrementTrackViewsAndUpdateCache}
+        />
+      </PageContainer>
+    </PageTransition>
   );
 }

@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
+import { PageTransition } from "@/components/page-transition";
 import { Pagination } from "@/components/pagination";
 import { SearchBox, SearchBoxFallback } from "@/components/search-box";
 import { TrackGrid } from "@/components/track-grid";
@@ -30,16 +31,18 @@ export default async function RscTracksPage({ searchParams }: PageProps<"/rsc">)
   const { items, page, totalPages } = paginate(matches, requestedPage);
 
   return (
-    <PageContainer grid>
-      <Suspense fallback={<SearchBoxFallback placeholder={PLACEHOLDER} />}>
-        <SearchBox placeholder={PLACEHOLDER} />
-      </Suspense>
-      {items.length > 0 ? (
-        <TrackGrid tracks={items} pattern="rsc" onOpenTrack={incrementTrackViews} />
-      ) : (
-        <p data-testid="no-results">No tracks match &ldquo;{search}&rdquo;.</p>
-      )}
-      <Pagination pathname="/rsc" page={page} totalPages={totalPages} query={search} />
-    </PageContainer>
+    <PageTransition>
+      <PageContainer grid>
+        <Suspense fallback={<SearchBoxFallback placeholder={PLACEHOLDER} />}>
+          <SearchBox placeholder={PLACEHOLDER} />
+        </Suspense>
+        {items.length > 0 ? (
+          <TrackGrid tracks={items} pattern="rsc" onOpenTrack={incrementTrackViews} />
+        ) : (
+          <p data-testid="no-results">No tracks match &ldquo;{search}&rdquo;.</p>
+        )}
+        <Pagination pathname="/rsc" page={page} totalPages={totalPages} query={search} />
+      </PageContainer>
+    </PageTransition>
   );
 }

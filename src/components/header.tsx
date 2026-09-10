@@ -9,7 +9,8 @@ import styles from "./header.module.css";
 /** Top navigation: home button plus the pattern switcher. Server Component. */
 export function Header() {
   return (
-    <header className={styles.headerBar}>
+    // The header is the spatial anchor while pages slide: globals.css pins this name in place.
+    <header className={styles.headerBar} style={{ viewTransitionName: "site-header" }}>
       <div className={styles.container}>
         <div className={styles.homeButtonContainer}>
           <Link href="/" className={styles.homeLink}>
