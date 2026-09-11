@@ -546,6 +546,8 @@ The form component is a Client Component because it holds state, but the mutatio
 
 It also shows `useOptimistic`, React's counterpart to Apollo's `optimisticResponse` for Server Actions. The hook takes the server-rendered count as its base value and a reducer; calling `addViews` inside the form action shows the expected count immediately, and React discards the optimistic value when the action settles. What replaces it is whatever the re-rendered page passes in: the new count on success, the old one if the action failed. Two rules: the update must happen inside a transition or action, which a form action is, and the base value must come from the server, or there is nothing to fall back to.
 
+The rollback is the part worth understanding. A failed action registers nothing and revalidates nothing, so the page does not re-render and the prop is unchanged; React discards the optimistic value by itself and the count is honest again, with no cleanup code. That is the difference from Apollo's `optimisticResponse`, where the client has to undo a cache write. `e2e/forms.spec.ts` proves it against the real server by signing in, clearing the session cookie, and submitting: the action refuses, the count snaps back, and the refusal shows.
+
 @@include(src/components/register-view-form.tsx)@@
 
 Render it under `TrackDetail` in `src/app/rsc/track/[trackId]/page.tsx`, passing `numberOfViews` from the query result.
@@ -798,8 +800,8 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 25 files, 85 tests
-pnpm test:e2e         # builds, starts the server, 39 tests
+pnpm vitest run       # 25 files, 86 tests
+pnpm test:e2e         # builds, starts the server, 40 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
