@@ -47,6 +47,31 @@ describe("RegisterViewForm", () => {
     expect(screen.getByText(/Registered 2 view\(s\)/)).toBeInTheDocument();
   });
 
+  it("drops the optimistic count when the action fails, so the number is never a lie", async () => {
+    const action = deferred();
+    registerView.mockReturnValue(action.promise);
+    render(<RegisterViewForm trackId="c_0" numberOfViews={10} />);
+    const count = screen.getByTestId("optimistic-views");
+
+    fireEvent.change(screen.getByLabelText("Views to register"), { target: { value: "3" } });
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: "Register views" }).closest("form")!);
+    });
+    expect(count).toHaveTextContent("13 view(s) (pending)");
+
+    await act(async () => {
+      action.resolve({ status: "failed", message: "Sign in to register views" });
+    });
+
+    // A failed action registers nothing and revalidates nothing, so the page does not
+    // re-render and the prop is still 10. React discards the optimistic 13 on its own: the
+    // rollback needs no code here, which is the difference from Apollo optimisticResponse,
+    // where the cache write is undone by the client.
+    expect(count).toHaveTextContent("10 view(s)");
+    expect(count).not.toHaveTextContent("(pending)");
+    expect(screen.getByRole("alert")).toHaveTextContent("Sign in to register views");
+  });
+
   it("validates in the browser and never calls the action for invalid input", async () => {
     render(<RegisterViewForm trackId="c_0" numberOfViews={10} />);
 

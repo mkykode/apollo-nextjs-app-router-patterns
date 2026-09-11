@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { GRAPHQL_URI } from "../src/lib/graphql-uri";
-import { signIn } from "./helpers/auth";
+import { SESSION_COOKIE, hasSession, signIn } from "./helpers/auth";
 
 const GRAPHQL_HOST = new URL(GRAPHQL_URI).host;
 const VIEWS = /(\d+) view\(s\)/;
@@ -116,4 +116,47 @@ test("useOptimistic shows the expected count while the Server Action is pending"
   await expect.poll(async () => parse(await detailViews.textContent())).toBeGreaterThanOrEqual(before + 3);
   await expect(optimistic).not.toContainText("(pending)");
   expect(parse(await optimistic.textContent())).toBe(parse(await detailViews.textContent()));
+});
+
+test("useOptimistic rolls back when the Server Action refuses the request", async ({ page }) => {
+  await signIn(page, "/rsc/track/c_8");
+  const detailViews = page.getByText(VIEWS).first();
+  const optimistic = page.getByTestId("optimistic-views");
+  await expect(optimistic).toBeVisible();
+  const before = parse(await optimistic.textContent());
+
+  // The page rendered the form for a signed-in user and keeps it on screen, but the action
+  // reads the session itself: every "use server" export is a public endpoint, so dropping the
+  // cookie here is the same as posting to it from outside the app.
+  //
+  // Wait for the stream to finish first. This page calls auth(), and Auth.js refreshes the
+  // session cookie whenever it reads one, so a response still in flight would re-set the
+  // cookie after clearCookies and the action would succeed.
+  await page.waitForLoadState("networkidle");
+  await page.context().clearCookies({ name: SESSION_COOKIE });
+  expect(await hasSession(page), "the session must be gone before submitting").toBe(false);
+
+  // Slow the action down so the optimistic value is observable before it rolls back.
+  await page.route(
+    (url) => url.host === new URL(page.url()).host,
+    async (route, request) => {
+      if (request.method() === "POST" && "next-action" in request.headers()) {
+        const response = await route.fetch();
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await route.fulfill({ response });
+        return;
+      }
+      await route.continue();
+    },
+  );
+
+  await page.getByLabel("Views to register").fill("3");
+  await page.getByRole("button", { name: "Register views" }).click();
+  await expect(optimistic).toHaveText(`Server count: ${before + 3} view(s) (pending)`);
+
+  // Settled: the action returned its refusal as state, revalidated nothing, so the page did
+  // not re-render. React discards the optimistic value and the count is honest again.
+  await expect(page.getByText("Sign in to register views")).toBeVisible();
+  await expect(optimistic).toHaveText(`Server count: ${before} view(s)`);
+  expect(parse(await detailViews.textContent())).toBe(before);
 });
