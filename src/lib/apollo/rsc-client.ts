@@ -27,8 +27,10 @@ export const { getClient, query, PreloadQuery } = registerApolloClient(
     new ApolloClient({
       cache: createCache(),
       // The same chain as the browser client (src/lib/apollo/links.ts), with a header that
-      // marks server-side requests in the API's logs. A session token would be resolved here
-      // per request, for example from cookies(), and attached by the SetContextLink.
+      // marks server-side requests in the API's logs. Nothing session-shaped is configured
+      // here on purpose: this client is shared with cached and static routes, so a per-request
+      // cookie read would drag them into dynamic rendering. Authenticated operations pass
+      // their own headers as context instead.
       link: createLinkChain({ uri: GRAPHQL_URI, headers: { "x-apollo-origin": "rsc" } }),
     }),
 );

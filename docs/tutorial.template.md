@@ -11,7 +11,7 @@ By the end you will be able to:
 - keep search and pagination in the URL so the server can read them, and know when component state with `useDeferredValue` is the better fit
 - stream independent sections behind content-shaped skeletons, scope `loading.tsx` with a route group, and turn an API miss into a real 404
 - compose an Apollo link chain (error, retry, auth headers) and manage local state with reactive variables and `@client` fields
-- add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
+- add a login with Better Auth: revocable sessions in SQLite, a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and a server-owned API token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
 - animate navigations with React's `<ViewTransition>`: a shared-element morph, Suspense reveals, directional slides from transition types, and a same-route crossfade, and say why the morph only pairs on prefetched pages
@@ -542,7 +542,7 @@ The card click showed both ways to run a mutation. Forms make the difference eas
 
 The same function runs in the browser before a submit and on the server inside the action or, for the client form, next to the GraphQL server's own validation. `FormData` values are strings, which is what `z.coerce` is for.
 
-**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip. Under Cache Components the RSC route is a Partial Prerender; the re-render streams the dynamic part again. The session check and the `context` on the mutation come from @@step(Authentication: Auth.js, the proxy, and the session in Server Actions)@@; ignore them until then.
+**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip. Under Cache Components the RSC route is a Partial Prerender; the re-render streams the dynamic part again. The session check and the `context` on the mutation come from @@step(Authentication: Better Auth, the proxy, and the session in Server Actions)@@; ignore them until then.
 
 @@include(src/lib/actions/register-view.ts)@@
 
@@ -691,46 +691,70 @@ Every request from either client goes through the same chain of links. Links run
 
 - `ErrorLink` observes every failure without swallowing it; the hook or the awaiting caller still receives the error.
 - `RetryLink` re-sends transient failures with exponential backoff and jitter. `shouldRetry` is the interesting part: never a mutation (not idempotent), never a GraphQL error (deterministic), never a 4xx (the client's fault).
-- `SetContextLink` sets headers per operation, merging whatever the operation's own `context.headers` carries. This is where a session token goes. The `getToken` slot suits a browser client with a token in memory; the RSC client cannot use it, because reading cookies inside a link would drag every cached and static route that shares the client into dynamic rendering. The Server Action in @@step(Authentication: Auth.js, the proxy, and the session in Server Actions)@@ passes the token per operation instead. The browser client sets no custom headers otherwise, because each one would need CORS approval from the API.
+- `SetContextLink` merges this client's fixed headers with whatever the operation carried in its own `context.headers`. That per-operation slot is where a session token goes, and it is the only place auth enters the chain: configuring a token on the client itself would mean reading cookies on every operation, which would drag every cached and static route that shares the RSC client into dynamic rendering. The Server Action in @@step(Authentication: Better Auth, the proxy, and the session in Server Actions)@@ attaches it at the call site instead. The browser client sets no custom headers at all, because each one would need CORS approval from the API and it has no token to send.
 - `HttpLink` performs the request and must be last.
 
 **Check:** open http://localhost:3000/suspense with DevTools offline, then go back online and reload: the console shows the ErrorLink entries and the request succeeds on a retry. `src/lib/apollo/links.test.ts` pins the retry policy.
 
-## Step: Authentication: Auth.js, the proxy, and the session in Server Actions
+## Step: Authentication: Better Auth, the proxy, and the session in Server Actions
 
-The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: an Auth.js credentials provider, a session in an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and its token handed to Apollo per operation. Swap the demo user table for a database and the upstream for an API that checks bearer tokens, and the shape does not change.
+The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: email-and-password sign-in, a session stored as a row and keyed by an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and an API token handed to Apollo per operation. Swap SQLite for Postgres and the upstream for an API that checks bearer tokens, and the shape does not change.
 
-Install Auth.js v5 (`pnpm add next-auth@beta`). It signs the cookie with `AUTH_SECRET`: `.env.development` carries a development-only value that `next dev` loads, and production sets its own (`npx auth secret`). If the secret is missing, `auth()` logs `MissingSecret` and returns `null`. It fails closed, so a misconfigured app locks everyone out rather than in.
+Install Better Auth (`pnpm add better-auth`). It signs the cookie with `BETTER_AUTH_SECRET`: `.env.development` carries a development-only value that `next dev` loads, and production sets its own (`npx auth secret`). Unlike Auth.js, a missing secret throws at startup rather than degrading, so a misconfigured deployment does not boot at all.
 
-**The user table and the schema.** One demo account, public because the login page prints it. The server never compares plaintext: it keeps a salted scrypt hash from Node's standard library, verifies it in constant time, and hands back a DTO without the hash. `server-only` keeps the module out of every client bundle.
+**Sessions are rows, not a cookie payload.** This is the decision worth understanding before any code. Auth.js with a credentials provider can only use its JWT strategy: the session lives in the cookie as an encrypted JWE, which is genuinely opaque to the browser but cannot be revoked, because there is nothing on the server to delete. Better Auth stores sessions in a table and the cookie holds an identifier, so signing out is a `DELETE`, `revokeSession` exists, and a role change takes effect on the next request. The cost is a database, and a lookup per verified read.
+
+`node:sqlite` makes that cost small enough for a demo: it ships with Node 22.5+, so there is no dependency to install and no native build.
+
+@@include(src/lib/auth/db.ts)@@
 
 @@include(src/lib/auth/demo-account.ts)@@
 
-@@include(src/lib/auth/users.ts)@@
-
-The login schema works like the register-view one: run in the browser before the submit, again in the Server Action, and once more in the provider. A `redirectTo` that is not a relative path is dropped rather than reported, because a fresh session must never follow an absolute URL to another site.
+The login schema works like the register-view one: run in the browser before the submit and again in the Server Action. A `redirectTo` that is not a relative path is dropped rather than reported, because a fresh session must never follow an absolute URL to another site. `paths.ts` also holds `proxyRedirect`, the proxy's entire decision as a pure function.
 
 @@include(src/lib/schemas/login.ts)@@
 
 @@include(src/lib/auth/paths.ts)@@
 
-**Two halves of one configuration.** Auth.js runs in two places: the proxy, in front of the matched routes, and the Node side (Route Handler, Server Components, Server Actions). The proxy should stay light, so the configuration is split. `auth.config.ts` holds what the proxy needs, `auth.ts` adds the credentials provider, which imports the user table and `node:crypto`.
+**One configuration, not two.** The Auth.js version split its config so the proxy could run half of it without dragging in the credentials provider. Nothing here needs that: `proxy.ts` decides from the cookie with a pure function and imports none of this, so the config is one file.
 
-@@include(src/lib/auth/auth.config.ts)@@
-
-The `authorized` callback is the proxy's whole decision. It sees only the decoded cookie, which is the optimistic check the Next.js authentication guide describes: cheap enough to run on every matched request, prefetches included, and not something to trust with data. `jwt` runs when the token is created and every time it is read; `user` is present only at sign-in, which is when the demo mints an opaque access token in place of the one an identity provider would return. `session` shapes what `auth()` gives the app, and the `.d.ts` teaches TypeScript the extra field.
+The `accessToken` field is the heart of this step, so read its comment before moving on. `input: false, returned: false` makes it genuinely server-owned: never accepted from a request body, never written to a response body. The `session.create.before` hook mints it once per sign-in, which is where the Auth.js `jwt` callback used to do the same job.
 
 @@include(src/lib/auth/auth.ts)@@
 
-@@include(src/lib/auth/next-auth.d.ts)@@
+`auth.api` is the whole surface: every endpoint Better Auth serves over HTTP is also a function, which is why the Server Actions never post to their own app.
 
-The Route Handler gives Auth.js its endpoints. The proxy is the `auth` function itself, with a matcher that keeps it off every other route:
+Reading a session takes the request headers, so one helper stands in for the single `auth()` export Auth.js had. It lives in its own module to keep `next/headers` out of `auth.ts`, which `instrumentation.ts` imports at server start, outside any request:
 
-@@include(src/app/api/auth/[...nextauth]/route.ts)@@
+@@include(src/lib/auth/session.ts)@@
+
+**Why the token is not on the session object.** The obvious place for an API token is the session, and under Auth.js that was a trap. One `session` callback fed both `auth()` and the public `GET /api/auth/session`, with no way to tell them apart, so a field added for a Server Action was published to the browser in the same move: the HttpOnly cookie protected a session whose own endpoint handed out the credential derived from it. Better Auth's `returned: false` is the thing Auth.js had no way to say.
+
+It is thorough, too. The field is hidden from `auth.api.getSession()` as well, so reading it has to be deliberate:
+
+@@include(src/lib/auth/access-token.ts)@@
+
+One warning for later. `customSession`, Better Auth's plugin for reshaping the session response, has exactly the same shape as the old Auth.js callback and would reintroduce the leak in full. The schema flag is the mechanism that fixes it; the plugin is not.
+
+**Schema and seed, once per server.** Better Auth needs its four tables before anything reads a session. `instrumentation.ts` runs once per server instance and finishes before the first request, which is the right hook for it, and it lets Next.js resolve the imports. The migration diffs rather than guesses, so adding a field to `auth.ts` is picked up by the next start; that is also why `validateSchema` is off, since a check that runs before this function can only ever fire spuriously.
+
+@@include(src/lib/auth/migrate.ts)@@
+
+@@include(src/instrumentation.ts)@@
+
+**The Route Handler and the proxy.** The handler is mounted unwrapped, which is only safe because of `returned: false`; the proxy reads the cookie and nothing else. Mounting the catch-all publishes every endpoint the config enables, so it is worth reading that list once: `emailAndPassword` brings a sign-up route with it, which the credentials provider never had, and `disabledPaths` closes it without disabling the feature the seed needs.
+
+@@include(src/app/api/auth/[...all]/route.ts)@@
 
 @@include(src/proxy.ts)@@
 
-**Sign in and sign out.** The action has the `useActionState` shape from @@step(Forms: a Server Action and a client mutation)@@. `signIn` runs the provider and sets the cookie on this response; wrong credentials throw `CredentialsSignin`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom.
+`getSessionCookie` does not verify the cookie or touch the database, and that is correct twice over: it is the optimistic check both auth guides describe, and the Next.js docs warn that `proxy.ts` may be deployed to a CDN and should not rely on shared modules, which a `node:sqlite` handle very much is.
+
+Notice what the proxy does *not* do: it never redirects a cookie-holder away from `/login`. The temptation is strong, and it is a trap, because the signal is presence and not validity. A cookie whose row is gone (signed out elsewhere, the gitignored database recreated) still reads as signed in here, so that redirect would send it to `/account`, which verifies for real, finds nothing, and sends it back to `/login`: a loop with the sign-in form on the far side of it. The rule that falls out is worth keeping: an unverified check may send someone *to* a verification, never away from one. The login page does its own check, below.
+
+**Sign in and sign out.** The action has the `useActionState` shape from @@step(Forms: a Server Action and a client mutation)@@. `auth.api.signInEmail` runs in-process; wrong credentials arrive as an `APIError` with status `UNAUTHORIZED`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom. The `nextCookies()` plugin is what actually lands the cookie, because a Server Action cannot set one by returning a header.
+
+One thing to know before copying this shape into something real: calling `auth.api.*` in-process skips the router, and the router is where Better Auth's rate limiting lives. The HTTP endpoints are throttled in production and this action is not, so a real login would add its own throttle here. The demo's credentials are printed on the page, so there is nothing to guess.
 
 @@include(src/lib/actions/auth.ts)@@
 
@@ -738,11 +762,11 @@ The Route Handler gives Auth.js its endpoints. The proxy is the `auth` function 
 
 @@include(src/app/login/page.tsx)@@
 
-**The protected page.** The proxy already turned strangers away, but the page calls `auth()` again, next to the data it renders. That is the defense in depth the guide asks for, and it is also what makes the route dynamic: `auth()` reads cookies, so no segment config is needed.
+**The protected page.** The proxy already turned strangers away, but the page calls `getSession` again, next to the data it renders. That is the defense in depth the guide asks for, and here it is load-bearing rather than ceremonial: this call verifies the signature and loads the row, so a session revoked since the last request fails here even though its cookie satisfied the proxy.
 
 @@include(src/app/account/page.tsx)@@
 
-**The session in a Server Action.** `registerView` from the forms step refuses to run without a session and passes the session's token to Apollo as per-operation `context`; the `SetContextLink` from @@step(The link chain)@@ merges those headers with its own. The token does not go through the link's `getToken` slot on purpose: `auth()` reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it at the call site keeps the decision where the session is.
+**The session in a Server Action.** `registerView` from the forms step refuses to run without a session, reads the API token with `readAccessToken`, and passes it to Apollo as per-operation `context`; the `SetContextLink` from @@step(The link chain)@@ merges those headers with its own. The token is attached at the call site rather than configured on the client on purpose: reading the session reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it per operation keeps the decision where the session is.
 
 @@include(src/lib/actions/register-view.ts)@@
 
@@ -756,7 +780,7 @@ The track page reads the session inside the same Suspense boundary as the track,
 
 The login page reads `searchParams` and the account page reads cookies, both request data; the root `loading.tsx` from @@step(Streaming sections, skeletons, route groups, and not found)@@ is the boundary above them.
 
-**Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 302 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, the header now shows the name, and the Server Action response carried a `Set-Cookie` for `authjs.session-token`, HttpOnly. Open http://localhost:3000/: the name is still there, streamed into a page whose shell was prerendered without it. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out: the cookie is gone and `/account` redirects again. `e2e/auth.spec.ts` covers the flow. The unit tests cover the `authorized` decision, the token callbacks, the password hashing, the schema, the action (with `signIn` mocked and the real `CredentialsSignin`), the form, and the session check in `registerView`.
+**Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 307 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, the header now shows the name, and the Server Action response carried a `Set-Cookie` for `better-auth.session_token`, HttpOnly. Now confirm the point of the step: `curl -s -b <cookie> localhost:3000/api/auth/get-session` returns the user and no `accessToken`, while `sqlite3 .auth.sqlite 'select accessToken from session'` shows the token the page just rendered. Open http://localhost:3000/: the name is still there, streamed into a page whose shell was prerendered without it. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out and check the table: the row is gone, not merely the cookie. `e2e/auth.spec.ts` covers the flow, including a replay of a cookie captured before sign-out and the assertion that the session endpoint leaks nothing; flip `returned` to `true` and that one test fails while everything else stays green, which is how quietly the original bug hid. The unit tests cover `proxyRedirect`, the schema, the action (with `signInEmail` mocked and a real `APIError`), the form, and the session and token checks in `registerView`.
 
 ## Step: Metadata: file conventions and Open Graph images
 

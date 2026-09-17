@@ -1,18 +1,18 @@
 import Link from "next/link";
-import { auth } from "@/lib/auth/auth";
 import { ACCOUNT_PATH, SIGN_IN_PATH } from "@/lib/auth/paths";
+import { getSession } from "@/lib/auth/session";
 import styles from "./header.module.css";
 
 /**
- * Per-user UI in the shared header. auth() reads the request's cookie, so this cannot be part
- * of the static shell; rendered inside a Suspense boundary it streams in behind the fallback
- * on every navigation while the rest of the header stays prerendered. That is the case Cache
- * Components was built for: the `dynamic` branch cannot afford a session read in the root
- * layout because it would make every route dynamic.
+ * Per-user UI in the shared header. getSession reads the request's cookie, so this cannot be
+ * part of the static shell; rendered inside a Suspense boundary it streams in behind the
+ * fallback on every navigation while the rest of the header stays prerendered. That is the
+ * case Cache Components was built for: the `dynamic` branch cannot afford a session read in
+ * the root layout because it would make every route dynamic.
  */
 export async function UserMenu() {
-  const session = await auth();
-  if (!session?.user) {
+  const session = await getSession();
+  if (!session) {
     return (
       <Link href={SIGN_IN_PATH} className={styles.account} data-testid="user-menu">
         Sign in

@@ -129,9 +129,9 @@ test("useOptimistic rolls back when the Server Action refuses the request", asyn
   // reads the session itself: every "use server" export is a public endpoint, so dropping the
   // cookie here is the same as posting to it from outside the app.
   //
-  // Wait for the stream to finish first. This page calls auth(), and Auth.js refreshes the
-  // session cookie whenever it reads one, so a response still in flight would re-set the
-  // cookie after clearCookies and the action would succeed.
+  // Wait for the stream to finish first. This page calls getSession, and Better Auth pushes
+  // the cookie's expiry out once `updateAge` is reached, so a response still in flight could
+  // re-set the cookie after clearCookies and the action would succeed.
   await page.waitForLoadState("networkidle");
   await page.context().clearCookies({ name: SESSION_COOKIE });
   expect(await hasSession(page), "the session must be gone before submitting").toBe(false);

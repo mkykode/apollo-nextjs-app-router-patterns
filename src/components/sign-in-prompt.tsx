@@ -14,7 +14,7 @@ export function SignInPrompt({ callbackUrl }: { callbackUrl: string }) {
       <div className={styles.form} data-testid="sign-in-prompt">
         <p className={styles.label}>
           Registering views through the Server Action needs a signed-in user: the action
-          reads the session with auth() and forwards its token to the API.
+          reads the session with getSession and forwards its token to the API.
         </p>
         <Link href={signInHref(callbackUrl)}>
           <Button>Sign in to register views</Button>

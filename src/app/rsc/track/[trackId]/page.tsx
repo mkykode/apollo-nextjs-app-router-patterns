@@ -12,7 +12,7 @@ import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons"
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { getSession } from "@/lib/auth/session";
 import { trackHref, tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
@@ -85,12 +85,12 @@ export default async function RscTrackPage({ params }: Props) {
  * refuse anyway, so this is a courtesy, not the check.
  */
 async function TrackSection({ trackId }: { trackId: string }) {
-  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
+  const [{ data }, session] = await Promise.all([getTrack(trackId), getSession()]);
   return (
     <>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      {session?.user ? (
+      {session ? (
         <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
       ) : (
         <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />

@@ -1,8 +1,8 @@
 import { type Page, expect } from "@playwright/test";
 import { DEMO_ACCOUNT } from "../../src/lib/auth/demo-account";
 
-/** Auth.js's cookie name over plain http; over https it is prefixed with `__Secure-`. */
-export const SESSION_COOKIE = "authjs.session-token";
+/** Better Auth's cookie name over plain http; over https it is prefixed with `__Secure-`. */
+export const SESSION_COOKIE = "better-auth.session_token";
 
 export const hasSession = async (page: Page) =>
   (await page.context().cookies()).some((cookie) => cookie.name === SESSION_COOKIE);

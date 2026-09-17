@@ -3,13 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The action imports the RSC client, which is guarded by `server-only`; outside React Server
 // Components that module throws, so the guard and the client are replaced for the test.
 vi.mock("server-only", () => ({}));
-const { auth, mutate, revalidatePath } = vi.hoisted(() => ({
-  auth: vi.fn(),
+const { getSession, readAccessToken, mutate, revalidatePath } = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  readAccessToken: vi.fn(),
   mutate: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 vi.mock("@/lib/apollo/rsc-client", () => ({ getClient: () => ({ mutate }) }));
-vi.mock("@/lib/auth/auth", () => ({ auth }));
+vi.mock("@/lib/auth/session", () => ({ getSession }));
+vi.mock("@/lib/auth/access-token", () => ({ readAccessToken }));
 vi.mock("next/cache", () => ({ revalidatePath }));
 
 import { type RegisterViewState, registerView } from "./register-view";
@@ -24,8 +26,13 @@ const form = (views: string, trackId = "c_0") => {
 
 describe("registerView (Server Action)", () => {
   beforeEach(() => {
-    auth.mockReset();
-    auth.mockResolvedValue({ user: { name: "Cadet Kitty" }, accessToken: "token-123" });
+    getSession.mockReset();
+    getSession.mockResolvedValue({
+      user: { name: "Cadet Kitty" },
+      session: { token: "session-token-abc" },
+    });
+    readAccessToken.mockReset();
+    readAccessToken.mockReturnValue("token-123");
     mutate.mockReset();
     revalidatePath.mockReset();
   });
@@ -40,7 +47,7 @@ describe("registerView (Server Action)", () => {
   });
 
   it("refuses to run without a session, before any mutation", async () => {
-    auth.mockResolvedValue(null);
+    getSession.mockResolvedValue(null);
 
     await expect(registerView(IDLE, form("2"))).resolves.toEqual({
       status: "failed",
@@ -48,6 +55,27 @@ describe("registerView (Server Action)", () => {
     });
     expect(mutate).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("refuses to run when the session carries no API token, before any mutation", async () => {
+    readAccessToken.mockReturnValue(null);
+
+    await expect(registerView(IDLE, form("2"))).resolves.toEqual({
+      status: "failed",
+      message: "Sign in to register views",
+    });
+    expect(mutate).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("reads the token by session token, not off the session object", async () => {
+    mutate.mockResolvedValue({
+      data: { incrementTrackViews: { track: { id: "c_0", numberOfViews: 11 } } },
+    });
+
+    await registerView(IDLE, form("1"));
+
+    expect(readAccessToken).toHaveBeenCalledWith("session-token-abc");
   });
 
   it("runs one mutation per view with the session token as context, then revalidates", async () => {
