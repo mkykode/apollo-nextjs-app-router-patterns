@@ -1,7 +1,8 @@
 /**
  * The one account the demo knows. It is public on purpose: the login page prints it and the
- * end-to-end tests sign in with it. The server never compares against this plaintext; it keeps
- * a salted hash in users.ts, as a real user table would.
+ * end-to-end tests sign in with it. The server never compares against this plaintext; Better
+ * Auth hashes the password into the account table when migrate.ts seeds it, as a real user
+ * table would.
  */
 export const DEMO_ACCOUNT = {
   name: "Cadet Kitty",

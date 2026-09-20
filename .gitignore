@@ -21,6 +21,12 @@ npm-debug.log*
 !.env.example
 !.env.development
 
+# better auth (created and seeded by src/instrumentation.ts)
+.auth.sqlite
+.auth.sqlite-journal
+.auth.e2e.sqlite
+.auth.e2e.sqlite-journal
+
 # vercel
 .vercel
 

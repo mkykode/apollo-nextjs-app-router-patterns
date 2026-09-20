@@ -20,3 +20,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm vitest run
       - run: pnpm build
+        # Better Auth refuses the default secret in a production build, and `next build` sets
+        # NODE_ENV=production. Nothing signed here is ever served, so a fixed value is fine.
+        env:
+          BETTER_AUTH_SECRET: ci-build-only-secret-at-least-32-chars

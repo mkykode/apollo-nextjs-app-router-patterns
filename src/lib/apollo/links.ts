@@ -11,8 +11,6 @@ interface LinkChainOptions {
   headers?: Record<string, string>;
   /** Next.js fetch options for the server-side client. */
   fetchOptions?: RequestInit;
-  /** Resolves a bearer token per operation; return null when there is no session. */
-  getToken?: () => Promise<string | null> | string | null;
 }
 
 const operationType = (operation: ApolloLink.Operation) =>
@@ -37,10 +35,10 @@ export function shouldRetry(error: ErrorLike, operation: ApolloLink.Operation) {
  *
  *   ErrorLink   observes every failure (logging, metrics); it does not swallow errors
  *   RetryLink   re-sends transient failures with exponential backoff and jitter
- *   SetContextLink   adds headers per operation: the place for an auth token
+ *   SetContextLink   merges this client's headers with the operation's own
  *   HttpLink    performs the request; the terminating link must be last
  */
-export function createLinkChain({ uri, headers, fetchOptions, getToken }: LinkChainOptions) {
+export function createLinkChain({ uri, headers, fetchOptions }: LinkChainOptions) {
   const errorLink = new ErrorLink(({ error, operation }) => {
     const label = `[Apollo] ${operationType(operation) ?? "operation"} ${operation.operationName}`;
     if (CombinedGraphQLErrors.is(error)) {
@@ -55,16 +53,15 @@ export function createLinkChain({ uri, headers, fetchOptions, getToken }: LinkCh
     attempts: { max: 3, retryIf: shouldRetry },
   });
 
-  const authLink = new SetContextLink(async (previousContext) => {
-    const token = (await getToken?.()) ?? null;
-    return {
-      headers: {
-        ...previousContext.headers,
-        ...headers,
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-    };
-  });
+  /**
+   * The per-operation header slot, and the reason this link exists at all: a caller can put
+   * headers on an individual operation's `context` and they arrive merged with the client's
+   * own. That is how the one authenticated request in the app gets its bearer token, in
+   * src/lib/actions/register-view.ts, next to the session read that produced it.
+   */
+  const headersLink = new SetContextLink((previousContext) => ({
+    headers: { ...previousContext.headers, ...headers },
+  }));
 
-  return ApolloLink.from([errorLink, retryLink, authLink, new HttpLink({ uri, fetchOptions })]);
+  return ApolloLink.from([errorLink, retryLink, headersLink, new HttpLink({ uri, fetchOptions })]);
 }

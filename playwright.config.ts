@@ -11,7 +11,7 @@ const PORT = Number(process.env.E2E_PORT ?? 3000);
 export const REVALIDATE_SECRET = "e2e-only-secret";
 
 /** Signs the session cookie of the server under test; `next start` does not load .env.development. */
-const AUTH_SECRET = "e2e-only-auth-secret";
+const BETTER_AUTH_SECRET = "e2e-only-auth-secret-at-least-32-chars";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -30,6 +30,12 @@ export default defineConfig({
     // Always build and start our own server: an existing one may lack these secrets.
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { REVALIDATE_SECRET, AUTH_SECRET },
+    // BETTER_AUTH_URL pins the origin to the port under test, so Better Auth needs no host allowlist.
+    env: {
+      REVALIDATE_SECRET,
+      BETTER_AUTH_SECRET,
+      BETTER_AUTH_URL: `http://localhost:${PORT}`,
+      AUTH_DB_PATH: ".auth.e2e.sqlite",
+    },
   },
 });

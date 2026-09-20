@@ -19,8 +19,8 @@ import { createLinkChain } from "./links";
 function makeClient() {
   return new ApolloClient({
     cache: createCache(),
-    // No custom headers here: the browser would need CORS approval for each one. A session
-    // token would come from getToken (a cookie-backed session or an in-memory value).
+    // No custom headers here: the browser would need CORS approval for each one, and this
+    // client has no token to send; the API token never leaves the server.
     link: createLinkChain({ uri: GRAPHQL_URI }),
   });
 }

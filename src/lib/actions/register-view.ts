@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { readAccessToken } from "@/lib/auth/access-token";
+import { getSession } from "@/lib/auth/session";
 import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
 
 /** Returned to useActionState; must be serializable. */
@@ -22,10 +23,14 @@ export type RegisterViewState =
  * every "use server" export is a public endpoint. Errors are returned, not thrown, so the
  * form can show them.
  *
- * The session's token travels as per-operation context rather than through the link chain's
- * getToken: auth() reads cookies, and a link that read cookies on every operation would break
- * the cached and static routes that share the RSC client. The SetContextLink merges these
- * headers with its own.
+ * The session's token travels as per-operation context rather than being configured on the
+ * client: getSession reads cookies, and a client that read cookies on every operation would
+ * break the cached and static routes that share the RSC client. The SetContextLink merges
+ * these headers with its own.
+ *
+ * readAccessToken is a second, deliberate step because the token is a server-owned field on
+ * the session row (see auth.ts): `returned: false` hides it from every response body,
+ * including the one getSession returns, so it cannot be picked up by accident.
  *
  * revalidatePath is what makes the page update: an action that revalidates nothing returns
  * only its value and Next.js does not re-render the route. With it, the action response
@@ -40,8 +45,13 @@ export async function registerView(
     return { status: "invalid", fieldErrors };
   }
 
-  const session = await auth();
-  if (!session?.user) {
+  const session = await getSession();
+  if (!session) {
+    return { status: "failed", message: "Sign in to register views" };
+  }
+
+  const accessToken = readAccessToken(session.session.token);
+  if (!accessToken) {
     return { status: "failed", message: "Sign in to register views" };
   }
 
@@ -54,7 +64,7 @@ export async function registerView(
       const result = await client.mutate({
         mutation: IncrementTrackViewsDocument,
         variables: { trackId },
-        context: { headers: { authorization: `Bearer ${session.accessToken}` } },
+        context: { headers: { authorization: `Bearer ${accessToken}` } },
       });
       numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
     }

@@ -11,7 +11,7 @@ By the end you will be able to:
 - keep search and pagination in the URL so the server can read them, and know when component state with `useDeferredValue` is the better fit
 - stream independent sections behind content-shaped skeletons, scope `loading.tsx` with a route group, and turn an API miss into a real 404
 - compose an Apollo link chain (error, retry, auth headers) and manage local state with reactive variables and `@client` fields
-- add a login with Auth.js: a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and its token handed to Apollo per operation
+- add a login with Better Auth: revocable sessions in SQLite, a route kept behind the session by `proxy.ts`, the session read again in a Server Component and a Server Action, and a server-owned API token handed to Apollo per operation
 - ship metadata through file conventions, including Open Graph images generated from GraphQL data
 - use transitions to change a suspense query's variables or call a Server Action without dropping the current UI
 - animate navigations with React's `<ViewTransition>`: a shared-element morph, Suspense reveals, directional slides from transition types, and a same-route crossfade, and say why the morph only pairs on prefetched pages
@@ -65,7 +65,7 @@ The reference material (pattern table, architecture diagram, interview talking p
 18. [Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all](#step-18-effects-uselayouteffect-useeffect-useeffectevent-and-no-effect-at-all)
 19. [Apollo local state: reactive variables and client fields](#step-19-apollo-local-state-reactive-variables-and-client-fields)
 20. [The link chain](#step-20-the-link-chain)
-21. [Authentication: Auth.js, the proxy, and the session in Server Actions](#step-21-authentication-authjs-the-proxy-and-the-session-in-server-actions)
+21. [Authentication: Better Auth, the proxy, and the session in Server Actions](#step-21-authentication-better-auth-the-proxy-and-the-session-in-server-actions)
 22. [Metadata: file conventions and Open Graph images](#step-22-metadata-file-conventions-and-open-graph-images)
 23. [Errors and retry](#step-23-errors-and-retry)
 24. [Tests](#step-24-tests)
@@ -122,9 +122,9 @@ Replace the dependency blocks in `package.json`. The versions here are the ones 
     "@apollo/client": "^4.2.12",
     "@apollo/client-integration-nextjs": "^0.14.5",
     "@graphql-typed-document-node/core": "^3.2.0",
+    "better-auth": "^1.7.5",
     "graphql": "^17.0.2",
     "next": "16.3.4",
-    "next-auth": "5.0.0-beta.32",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",
@@ -268,9 +268,18 @@ export default eslintConfig;
 # Absolute origin used for Open Graph and other metadata URLs (metadataBase).
 # NEXT_PUBLIC_SITE_URL=https://example.com
 
-# Required by Auth.js to sign the session cookie. Generate one: `npx auth secret` or
-# `openssl rand -base64 32`. .env.development carries a development-only value.
-# AUTH_SECRET=
+# Required by Better Auth to sign the session cookie. Generate one: `npx auth@latest secret`
+# or `openssl rand -base64 32`. .env.development carries a development-only value.
+# BETTER_AUTH_SECRET=
+
+# Optional. Where the demo's SQLite session database lives. Defaults to ./.auth.sqlite,
+# which instrumentation.ts creates and seeds on server start.
+# AUTH_DB_PATH=
+
+# The app's own origin. Set this in any deployment: it pins the base URL Better Auth builds
+# and the origins it trusts. Left unset, auth.ts falls back to a localhost allowlist, which is
+# only right for development.
+# BETTER_AUTH_URL=https://example.com
 ```
 
 **Check:** `pnpm exec next --version` prints `Next.js 16.x`, and `pnpm lint` runs without complaining about the config.
@@ -575,8 +584,10 @@ export const { getClient, query, PreloadQuery } = registerApolloClient(
     new ApolloClient({
       cache: createCache(),
       // The same chain as the browser client (src/lib/apollo/links.ts), with a header that
-      // marks server-side requests in the API's logs. A session token would be resolved here
-      // per request, for example from cookies(), and attached by the SetContextLink.
+      // marks server-side requests in the API's logs. Nothing session-shaped is configured
+      // here on purpose: this client is shared with cached and static routes, so a per-request
+      // cookie read would drag them into dynamic rendering. Authenticated operations pass
+      // their own headers as context instead.
       link: createLinkChain({ uri: GRAPHQL_URI, headers: { "x-apollo-origin": "rsc" } }),
     }),
 );
@@ -607,8 +618,8 @@ import { createLinkChain } from "./links";
 function makeClient() {
   return new ApolloClient({
     cache: createCache(),
-    // No custom headers here: the browser would need CORS approval for each one. A session
-    // token would come from getToken (a cookie-backed session or an in-memory value).
+    // No custom headers here: the browser would need CORS approval for each one, and this
+    // client has no token to send; the API token never leaves the server.
     link: createLinkChain({ uri: GRAPHQL_URI }),
   });
 }
@@ -2042,7 +2053,7 @@ import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons"
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { getSession } from "@/lib/auth/session";
 import { trackHref, tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
@@ -2115,12 +2126,12 @@ export default async function RscTrackPage({ params }: Props) {
  * refuse anyway, so this is a courtesy, not the check.
  */
 async function TrackSection({ trackId }: { trackId: string }) {
-  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
+  const [{ data }, session] = await Promise.all([getTrack(trackId), getSession()]);
   return (
     <>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      {session?.user ? (
+      {session ? (
         <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
       ) : (
         <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />
@@ -2331,7 +2342,8 @@ The same function runs in the browser before a submit and on the server inside t
 import { revalidatePath } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { readAccessToken } from "@/lib/auth/access-token";
+import { getSession } from "@/lib/auth/session";
 import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
 
 /** Returned to useActionState; must be serializable. */
@@ -2350,10 +2362,14 @@ export type RegisterViewState =
  * every "use server" export is a public endpoint. Errors are returned, not thrown, so the
  * form can show them.
  *
- * The session's token travels as per-operation context rather than through the link chain's
- * getToken: auth() reads cookies, and a link that read cookies on every operation would break
- * the cached and static routes that share the RSC client. The SetContextLink merges these
- * headers with its own.
+ * The session's token travels as per-operation context rather than being configured on the
+ * client: getSession reads cookies, and a client that read cookies on every operation would
+ * break the cached and static routes that share the RSC client. The SetContextLink merges
+ * these headers with its own.
+ *
+ * readAccessToken is a second, deliberate step because the token is a server-owned field on
+ * the session row (see auth.ts): `returned: false` hides it from every response body,
+ * including the one getSession returns, so it cannot be picked up by accident.
  *
  * revalidatePath is what makes the page update: an action that revalidates nothing returns
  * only its value and Next.js does not re-render the route. With it, the action response
@@ -2368,8 +2384,13 @@ export async function registerView(
     return { status: "invalid", fieldErrors };
   }
 
-  const session = await auth();
-  if (!session?.user) {
+  const session = await getSession();
+  if (!session) {
+    return { status: "failed", message: "Sign in to register views" };
+  }
+
+  const accessToken = readAccessToken(session.session.token);
+  if (!accessToken) {
     return { status: "failed", message: "Sign in to register views" };
   }
 
@@ -2382,7 +2403,7 @@ export async function registerView(
       const result = await client.mutate({
         mutation: IncrementTrackViewsDocument,
         variables: { trackId },
-        context: { headers: { authorization: `Bearer ${session.accessToken}` } },
+        context: { headers: { authorization: `Bearer ${accessToken}` } },
       });
       numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
     }
@@ -2958,7 +2979,7 @@ import { MoreTracksSkeleton, TrackDetailSkeleton } from "@/components/skeletons"
 import { TrackDetail } from "@/components/track-detail";
 import { rethrowAsNotFound } from "@/lib/apollo/not-found";
 import { query } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { getSession } from "@/lib/auth/session";
 import { trackHref, tracksHref } from "@/lib/patterns";
 
 type Props = PageProps<"/rsc/track/[trackId]">;
@@ -3031,12 +3052,12 @@ export default async function RscTrackPage({ params }: Props) {
  * refuse anyway, so this is a courtesy, not the check.
  */
 async function TrackSection({ trackId }: { trackId: string }) {
-  const [{ data }, session] = await Promise.all([getTrack(trackId), auth()]);
+  const [{ data }, session] = await Promise.all([getTrack(trackId), getSession()]);
   return (
     <>
       <TrackDetail track={data.track} />
       <QuickViewButton trackId={trackId} />
-      {session?.user ? (
+      {session ? (
         <RegisterViewForm trackId={trackId} numberOfViews={data.track.numberOfViews ?? 0} />
       ) : (
         <SignInPrompt callbackUrl={trackHref("rsc", trackId)} />
@@ -3497,8 +3518,6 @@ interface LinkChainOptions {
   headers?: Record<string, string>;
   /** Next.js fetch options for the server-side client. */
   fetchOptions?: RequestInit;
-  /** Resolves a bearer token per operation; return null when there is no session. */
-  getToken?: () => Promise<string | null> | string | null;
 }
 
 const operationType = (operation: ApolloLink.Operation) =>
@@ -3523,10 +3542,10 @@ export function shouldRetry(error: ErrorLike, operation: ApolloLink.Operation) {
  *
  *   ErrorLink   observes every failure (logging, metrics); it does not swallow errors
  *   RetryLink   re-sends transient failures with exponential backoff and jitter
- *   SetContextLink   adds headers per operation: the place for an auth token
+ *   SetContextLink   merges this client's headers with the operation's own
  *   HttpLink    performs the request; the terminating link must be last
  */
-export function createLinkChain({ uri, headers, fetchOptions, getToken }: LinkChainOptions) {
+export function createLinkChain({ uri, headers, fetchOptions }: LinkChainOptions) {
   const errorLink = new ErrorLink(({ error, operation }) => {
     const label = `[Apollo] ${operationType(operation) ?? "operation"} ${operation.operationName}`;
     if (CombinedGraphQLErrors.is(error)) {
@@ -3541,42 +3560,68 @@ export function createLinkChain({ uri, headers, fetchOptions, getToken }: LinkCh
     attempts: { max: 3, retryIf: shouldRetry },
   });
 
-  const authLink = new SetContextLink(async (previousContext) => {
-    const token = (await getToken?.()) ?? null;
-    return {
-      headers: {
-        ...previousContext.headers,
-        ...headers,
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-    };
-  });
+  /**
+   * The per-operation header slot, and the reason this link exists at all: a caller can put
+   * headers on an individual operation's `context` and they arrive merged with the client's
+   * own. That is how the one authenticated request in the app gets its bearer token, in
+   * src/lib/actions/register-view.ts, next to the session read that produced it.
+   */
+  const headersLink = new SetContextLink((previousContext) => ({
+    headers: { ...previousContext.headers, ...headers },
+  }));
 
-  return ApolloLink.from([errorLink, retryLink, authLink, new HttpLink({ uri, fetchOptions })]);
+  return ApolloLink.from([errorLink, retryLink, headersLink, new HttpLink({ uri, fetchOptions })]);
 }
 ```
 
 - `ErrorLink` observes every failure without swallowing it; the hook or the awaiting caller still receives the error.
 - `RetryLink` re-sends transient failures with exponential backoff and jitter. `shouldRetry` is the interesting part: never a mutation (not idempotent), never a GraphQL error (deterministic), never a 4xx (the client's fault).
-- `SetContextLink` sets headers per operation, merging whatever the operation's own `context.headers` carries. This is where a session token goes. The `getToken` slot suits a browser client with a token in memory; the RSC client cannot use it, because reading cookies inside a link would drag every cached and static route that shares the client into dynamic rendering. The Server Action in Step 21 passes the token per operation instead. The browser client sets no custom headers otherwise, because each one would need CORS approval from the API.
+- `SetContextLink` merges this client's fixed headers with whatever the operation carried in its own `context.headers`. That per-operation slot is where a session token goes, and it is the only place auth enters the chain: configuring a token on the client itself would mean reading cookies on every operation, which would drag every cached and static route that shares the RSC client into dynamic rendering. The Server Action in Step 21 attaches it at the call site instead. The browser client sets no custom headers at all, because each one would need CORS approval from the API and it has no token to send.
 - `HttpLink` performs the request and must be last.
 
 **Check:** open http://localhost:3000/suspense with DevTools offline, then go back online and reload: the console shows the ErrorLink entries and the request succeeds on a retry. `src/lib/apollo/links.test.ts` pins the retry policy.
 
-## Step 21: Authentication: Auth.js, the proxy, and the session in Server Actions
+## Step 21: Authentication: Better Auth, the proxy, and the session in Server Actions
 
-The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: an Auth.js credentials provider, a session in an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and its token handed to Apollo per operation. Swap the demo user table for a database and the upstream for an API that checks bearer tokens, and the shape does not change.
+The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: email-and-password sign-in, a session stored as a row and keyed by an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and an API token handed to Apollo per operation. Swap SQLite for Postgres and the upstream for an API that checks bearer tokens, and the shape does not change.
 
-Install Auth.js v5 (`pnpm add next-auth@beta`). It signs the cookie with `AUTH_SECRET`: `.env.development` carries a development-only value that `next dev` loads, and production sets its own (`npx auth secret`). If the secret is missing, `auth()` logs `MissingSecret` and returns `null`. It fails closed, so a misconfigured app locks everyone out rather than in.
+Install Better Auth (`pnpm add better-auth`). It signs the cookie with `BETTER_AUTH_SECRET`: `.env.development` carries a development-only value that `next dev` loads, and production sets its own (`npx auth secret`). Unlike Auth.js, a missing secret throws at startup rather than degrading, so a misconfigured deployment does not boot at all.
 
-**The user table and the schema.** One demo account, public because the login page prints it. The server never compares plaintext: it keeps a salted scrypt hash from Node's standard library, verifies it in constant time, and hands back a DTO without the hash. `server-only` keeps the module out of every client bundle.
+**Sessions are rows, not a cookie payload.** This is the decision worth understanding before any code. Auth.js with a credentials provider can only use its JWT strategy: the session lives in the cookie as an encrypted JWE, which is genuinely opaque to the browser but cannot be revoked, because there is nothing on the server to delete. Better Auth stores sessions in a table and the cookie holds an identifier, so signing out is a `DELETE`, `revokeSession` exists, and a role change takes effect on the next request. The cost is a database, and a lookup per verified read.
+
+`node:sqlite` makes that cost small enough for a demo: it ships with Node 22.5+, so there is no dependency to install and no native build.
+
+```ts
+// src/lib/auth/db.ts
+import { DatabaseSync } from "node:sqlite";
+
+/**
+ * The demo's SQLite file. Better Auth needs a real database because its sessions are rows,
+ * not a cookie payload: that is what makes them revocable. `node:sqlite` ships with Node
+ * (22.5+), so this costs no dependency and no native build.
+ *
+ * The file is gitignored, and src/instrumentation.ts creates the schema and seeds the demo
+ * user in it before the server takes its first request. A deployment would point AUTH_DB_PATH
+ * at a volume, or swap this one module for Postgres; nothing else in the app knows which
+ * database it is.
+ *
+ * The handle is opened here, at import, because that is what Better Auth's `database` option
+ * takes: passing a factory makes it treat the result as a custom adapter and migrations stop
+ * working. So `next build` leaves an empty file behind when it imports the routes, which the
+ * first server start then migrates.
+ */
+const AUTH_DB_PATH = process.env.AUTH_DB_PATH ?? ".auth.sqlite";
+
+export const authDb = new DatabaseSync(AUTH_DB_PATH);
+```
 
 ```ts
 // src/lib/auth/demo-account.ts
 /**
  * The one account the demo knows. It is public on purpose: the login page prints it and the
- * end-to-end tests sign in with it. The server never compares against this plaintext; it keeps
- * a salted hash in users.ts, as a real user table would.
+ * end-to-end tests sign in with it. The server never compares against this plaintext; Better
+ * Auth hashes the password into the account table when migrate.ts seeds it, as a real user
+ * table would.
  */
 export const DEMO_ACCOUNT = {
   name: "Cadet Kitty",
@@ -3585,66 +3630,7 @@ export const DEMO_ACCOUNT = {
 } as const;
 ```
 
-```ts
-// src/lib/auth/users.ts
-import "server-only";
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { DEMO_ACCOUNT } from "./demo-account";
-
-/** What the rest of the app may see of a user: a DTO with no password material. */
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-}
-
-interface UserRecord extends User {
-  /** `scrypt$<salt hex>$<key hex>`, produced by hashPassword. */
-  passwordHash: string;
-}
-
-/**
- * The users "table". A real app queries a database; the shape of the code stays the same:
- * find the record, verify the password against its salted hash, hand back a DTO without the
- * hash. The whole module is server-only, so the hash can never end up in a client bundle.
- */
-const USERS: readonly UserRecord[] = [
-  {
-    id: "cadet-1",
-    name: DEMO_ACCOUNT.name,
-    email: DEMO_ACCOUNT.email,
-    passwordHash: "scrypt$e397c33c378796c01cd8588efab3f973$afd1795acac132d5ec71fb56e5606c227cba2d6c150514688721ec74dbbb67204f9367a4f9c1908b60aff91900378b6f0dd518f6f8465bf2c0a8ee16dbc162ee",
-  },
-];
-
-const KEY_LENGTH = 64;
-
-/** scrypt is in Node's standard library: no bcrypt dependency, no native build. */
-export function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
-  return `scrypt$${salt}$${scryptSync(password, salt, KEY_LENGTH).toString("hex")}`;
-}
-
-/** Constant-time comparison, so response timing does not reveal how many bytes matched. */
-export function verifyPassword(password: string, stored: string) {
-  const [algorithm, salt, keyHex] = stored.split("$");
-  if (algorithm !== "scrypt" || !salt || !keyHex) return false;
-  const expected = Buffer.from(keyHex, "hex");
-  const actual = scryptSync(password, salt, expected.length);
-  return timingSafeEqual(actual, expected);
-}
-
-export function findUserByEmail(email: string) {
-  const wanted = email.trim().toLowerCase();
-  return USERS.find((user) => user.email.toLowerCase() === wanted);
-}
-
-/** Strip everything a session must not carry. */
-export function toUser({ id, name, email }: UserRecord): User {
-  return { id, name, email };
-}
-```
-
-The login schema works like the register-view one: run in the browser before the submit, again in the Server Action, and once more in the provider. A `redirectTo` that is not a relative path is dropped rather than reported, because a fresh session must never follow an absolute URL to another site.
+The login schema works like the register-view one: run in the browser before the submit and again in the Server Action. A `redirectTo` that is not a relative path is dropped rather than reported, because a fresh session must never follow an absolute URL to another site. `paths.ts` also holds `proxyRedirect`, the proxy's entire decision as a pure function.
 
 ```ts
 // src/lib/schemas/login.ts
@@ -3713,165 +3699,390 @@ export const safeRedirectPath = (value: unknown, fallback: string = ACCOUNT_PATH
 /** The sign-in page, remembering where to go afterwards. */
 export const signInHref = (callbackUrl: string): Route =>
   `${SIGN_IN_PATH}?callbackUrl=${encodeURIComponent(callbackUrl)}` as Route;
-```
-
-**Two halves of one configuration.** Auth.js runs in two places: the proxy, in front of the matched routes, and the Node side (Route Handler, Server Components, Server Actions). The proxy should stay light, so the configuration is split. `auth.config.ts` holds what the proxy needs, `auth.ts` adds the credentials provider, which imports the user table and `node:crypto`.
-
-```ts
-// src/lib/auth/auth.config.ts
-import type { NextAuthConfig } from "next-auth";
-import { ACCOUNT_PATH, SIGN_IN_PATH, isProtectedPath, signInHref } from "./paths";
 
 /**
- * The part of the Auth.js configuration the proxy can run: no provider that needs Node (the
- * credentials check imports node:crypto), no database. auth.ts spreads this and adds the
- * provider; proxy.ts uses it as is.
+ * Where the proxy should send a request, or null to let it through. Keeping the decision here
+ * as a pure function is what makes it testable: the proxy supplies nothing but `signedIn`,
+ * read from the presence of the session cookie, so there is no request or database to fake.
+ *
+ * It only ever guards protected routes, never /login, and that asymmetry is the whole lesson
+ * of an optimistic check. `signedIn` means "a session cookie is present", not "the session is
+ * good". Bouncing a cookie-holder off the sign-in page would trap anyone whose cookie outlives
+ * its row (signed out elsewhere, row deleted, the gitignored database recreated): /account
+ * verifies, finds nothing, and redirects to /login, which would bounce them back to /account
+ * forever, with no way to reach the form that fixes it. Sending a stranger *to* a check is
+ * safe; sending them away from one on an unverified signal is not. /login does its own
+ * verified check instead.
  */
-export const authConfig = {
-  pages: { signIn: SIGN_IN_PATH },
-  // A JWT in an HttpOnly cookie: no session store, and the proxy can decode it without I/O.
-  session: { strategy: "jwt" },
-  // The demo runs on whatever host starts it; a deployment sets AUTH_URL instead.
-  trustHost: true,
-  providers: [],
-  callbacks: {
-    /**
-     * Runs in the proxy for every matched request with nothing but the decoded cookie: an
-     * optimistic check. It keeps strangers off /account and signed-in users off /login. The
-     * data itself is protected where it is read (auth() in the page and in the Server Action).
-     */
-    authorized({ auth, request: { nextUrl } }) {
-      const signedIn = Boolean(auth?.user);
-      if (isProtectedPath(nextUrl.pathname)) {
-        if (signedIn) return true;
-        // Auth.js would redirect on `false` too, but with an absolute callbackUrl; a path is enough.
-        return Response.redirect(new URL(signInHref(nextUrl.pathname + nextUrl.search), nextUrl.origin));
-      }
-      if (nextUrl.pathname === SIGN_IN_PATH && signedIn) {
-        return Response.redirect(new URL(ACCOUNT_PATH, nextUrl.origin));
-      }
-      return true;
-    },
-    /**
-     * Runs when the JWT is created and whenever it is read; `user` is only set at sign-in.
-     * A credentials provider has no identity provider handing out API tokens, so the demo mints
-     * an opaque one here. It stands in for the token a real upstream would verify.
-     */
-    jwt({ token, user }) {
-      if (user) {
-        token.accessToken = crypto.randomUUID();
-      }
-      return token;
-    },
-    /** Shapes what auth() returns. Only copy what the app needs; the JWT itself stays server-side. */
-    session({ session, token }) {
-      return { ...session, accessToken: token.accessToken ?? "" };
-    },
-  },
-} satisfies NextAuthConfig;
+export function proxyRedirect({
+  pathname,
+  search,
+  signedIn,
+}: {
+  pathname: string;
+  search: string;
+  signedIn: boolean;
+}): Route | null {
+  if (isProtectedPath(pathname)) {
+    return signedIn ? null : signInHref(pathname + search);
+  }
+  return null;
+}
 ```
 
-The `authorized` callback is the proxy's whole decision. It sees only the decoded cookie, which is the optimistic check the Next.js authentication guide describes: cheap enough to run on every matched request, prefetches included, and not something to trust with data. `jwt` runs when the token is created and every time it is read; `user` is present only at sign-in, which is when the demo mints an opaque access token in place of the one an identity provider would return. `session` shapes what `auth()` gives the app, and the `.d.ts` teaches TypeScript the extra field.
+**One configuration, not two.** The Auth.js version split its config so the proxy could run half of it without dragging in the credentials provider. Nothing here needs that: `proxy.ts` decides from the cookie with a pure function and imports none of this, so the config is one file.
+
+The `accessToken` field is the heart of this step, so read its comment before moving on. `input: false, returned: false` makes it genuinely server-owned: never accepted from a request body, never written to a response body. The `session.create.before` hook mints it once per sign-in, which is where the Auth.js `jwt` callback used to do the same job.
 
 ```ts
 // src/lib/auth/auth.ts
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import { credentialsSchema } from "@/lib/schemas/login";
-import { authConfig } from "./auth.config";
-import { findUserByEmail, toUser, verifyPassword } from "./users";
+import { betterAuth } from "better-auth";
+import { nextCookies } from "better-auth/next-js";
+import { authDb } from "./db";
+
+/** How long a signed-in session stays valid, and how often using it pushes that out. */
+const SESSION_EXPIRES_IN = 60 * 60 * 24 * 7;
+const SESSION_UPDATE_AGE = 60 * 60 * 24;
 
 /**
- * The full Auth.js instance, for the Node side: Route Handler, Server Components, Server
- * Actions. `auth()` reads the session cookie for the current request; `signIn` and `signOut`
- * are the server-side calls the actions wrap.
+ * The auth instance, and the whole configuration.
+ *
+ * The Auth.js version this replaced split its config in two so the proxy could run part of it
+ * without pulling in the credentials provider. That reason is gone: proxy.ts now decides with
+ * `getSessionCookie` and a pure function and imports none of this, so one file is the honest
+ * shape.
+ *
+ * `auth.api` is the whole surface. Every HTTP endpoint Better Auth serves is also callable as
+ * a function, so a Server Action signs in with `auth.api.signInEmail` in-process rather than
+ * posting to itself, and a Server Component reads the session with
+ * `auth.api.getSession({ headers: await headers() })`.
  */
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  ...authConfig,
-  providers: [
-    Credentials({
+export const auth = betterAuth({
+  database: authDb,
+  advanced: {
+    database: {
       /**
-       * Called with the posted fields when the credentials provider runs. Returning null makes
-       * Auth.js throw CredentialsSignin; returning a user makes it issue the session. The
-       * schema runs again here because this endpoint is reachable without the form.
+       * Off because this app migrates in-band. The check runs when an instance is created and
+       * compares the schema against the database, which is useful when you apply migrations
+       * out of band and want to be told you forgot. Here `prepareAuthDatabase()` in
+       * instrumentation.ts is that reminder, and it runs on every server start, so the check
+       * can only fire when it is wrong: during `next build`, which imports the routes without
+       * ever starting a server, and in the moment before the migration it is asking for has
+       * finished. A drifted column is added by the next boot either way.
        */
-      async authorize(credentials) {
-        const parsed = credentialsSchema.safeParse(credentials);
-        if (!parsed.success) return null;
-        const user = findUserByEmail(parsed.data.email);
-        if (!user || !verifyPassword(parsed.data.password, user.passwordHash)) return null;
-        return toUser(user);
+      validateSchema: false,
+    },
+  },
+  /**
+   * The allowlist is Better Auth's replacement for Auth.js's `trustHost: true`. Hosts on it
+   * may be used to build the request's base URL, and they become trusted origins for the
+   * endpoints' CSRF check; anything else takes the fallback rather than throwing, which keeps
+   * `next dev -p 4000` working. A deployment sets BETTER_AUTH_URL and skips the list.
+   *
+   * No `protocol` here on purpose. It looks like the way to say "this is local development",
+   * but it is read by the cookie builder too, and `"http"` turns off `Secure` and the
+   * `__Secure-` prefix on the session cookie for good: not just in dev, but in a production
+   * deploy that forgot to set BETTER_AUTH_URL, where the object below is what applies. Better
+   * Auth already derives `http://` for loopback hosts, so leaving it out costs nothing in dev
+   * and stops the fallback from being worse than having no fallback at all.
+   */
+  baseURL: process.env.BETTER_AUTH_URL ?? {
+    allowedHosts: ["localhost:3000", "localhost:3001"],
+    fallback: "http://localhost:3000",
+  },
+  emailAndPassword: { enabled: true },
+  /**
+   * Enabling email and password also mounts POST /api/auth/sign-up/email, and the catch-all
+   * route hands it straight to the browser. The Auth.js credentials provider had no such
+   * endpoint, so this is new public surface: anyone could create rows in the demo's SQLite
+   * file. This closes the HTTP route with a 404.
+   *
+   * The check runs in the router's `onRequest`, which only sees requests that arrive over
+   * HTTP, so migrate.ts can still seed the demo user by calling `auth.api.signUpEmail`
+   * in-process. That split is the reason to disable the path rather than the feature:
+   * `emailAndPassword.disableSignUp` would turn off the seed too.
+   */
+  disabledPaths: ["/sign-up/email"],
+  session: {
+    expiresIn: SESSION_EXPIRES_IN,
+    updateAge: SESSION_UPDATE_AGE,
+    additionalFields: {
+      /**
+       * The opaque token the GraphQL API would verify, stored next to the session that owns it.
+       *
+       * Both flags are the point of this field. `returned: false` keeps it out of every
+       * response body, so GET /api/auth/get-session cannot hand it to a script on the page;
+       * `input: false` keeps it out of every request body, so nobody can set their own. That
+       * makes it genuinely server-owned, which is the thing the Auth.js session callback had
+       * no way to express: there, one field added for a Server Action was published to the
+       * browser at the same time.
+       *
+       * Because `returned: false` also hides it from `auth.api.getSession()`, the Server
+       * Action reads it through readAccessToken() in access-token.ts rather than off the
+       * session object. The token never appears in a session payload in any code path.
+       */
+      accessToken: {
+        type: "string",
+        required: false,
+        input: false,
+        returned: false,
       },
-    }),
-  ],
+    },
+  },
+  databaseHooks: {
+    session: {
+      create: {
+        /**
+         * Runs once per sign-in, before the session row is written. This is where the Auth.js
+         * `jwt` callback used to mint the token. A credentials-style login has no identity
+         * provider handing out API tokens, so the demo invents one; it stands in for the
+         * token a real upstream would issue and verify.
+         */
+        before: async (session) => ({
+          data: { ...session, accessToken: crypto.randomUUID() },
+        }),
+      },
+    },
+  },
+  /**
+   * Must be last in the array. A Server Action cannot set a cookie by returning a Set-Cookie
+   * header, so this plugin forwards whatever Better Auth wanted to set through Next.js's own
+   * cookies() helper.
+   */
+  plugins: [nextCookies()],
 });
 ```
 
+`auth.api` is the whole surface: every endpoint Better Auth serves over HTTP is also a function, which is why the Server Actions never post to their own app.
+
+Reading a session takes the request headers, so one helper stands in for the single `auth()` export Auth.js had. It lives in its own module to keep `next/headers` out of `auth.ts`, which `instrumentation.ts` imports at server start, outside any request:
+
 ```ts
-// src/lib/auth/next-auth.d.ts
-import type { DefaultSession } from "next-auth";
+// src/lib/auth/session.ts
+import "server-only";
+import { headers } from "next/headers";
+import { auth } from "./auth";
 
-/** Module augmentation: the fields auth.config.ts adds to the session and the JWT. */
-declare module "next-auth" {
-  interface Session {
-    user: DefaultSession["user"];
-    /** Opaque token for the upstream API, issued at sign-in. */
-    accessToken: string;
-  }
-}
-
-declare module "next-auth/jwt" {
-  interface JWT {
-    accessToken?: string;
-  }
+/**
+ * Reads the current session from the request's cookie.
+ *
+ * `auth.api.getSession` is the whole call, but it needs the request headers, so every Server
+ * Component and Server Action that wants a session would otherwise repeat the same
+ * `await headers()` dance. This is the single entry point the Auth.js `auth()` export used to
+ * be, kept in its own module so `next/headers` stays out of auth.ts, which instrumentation.ts
+ * imports through migrate.ts at server start, outside any request.
+ *
+ * Calling this makes the surrounding route dynamic, which is the point: a session read is a
+ * cookie read. Put it inside a Suspense boundary, next to the data it guards, rather than in a
+ * layout that would pull the whole tree out of the static shell.
+ *
+ * The returned session carries no `accessToken`; `returned: false` in auth.ts hides it. Ask
+ * for it on purpose with readAccessToken() in access-token.ts.
+ */
+export async function getSession() {
+  return auth.api.getSession({ headers: await headers() });
 }
 ```
 
-The Route Handler gives Auth.js its endpoints. The proxy is the `auth` function itself, with a matcher that keeps it off every other route:
+**Why the token is not on the session object.** The obvious place for an API token is the session, and under Auth.js that was a trap. One `session` callback fed both `auth()` and the public `GET /api/auth/session`, with no way to tell them apart, so a field added for a Server Action was published to the browser in the same move: the HttpOnly cookie protected a session whose own endpoint handed out the credential derived from it. Better Auth's `returned: false` is the thing Auth.js had no way to say.
+
+It is thorough, too. The field is hidden from `auth.api.getSession()` as well, so reading it has to be deliberate:
 
 ```ts
-// src/app/api/auth/[...nextauth]/route.ts
-import { handlers } from "@/lib/auth/auth";
+// src/lib/auth/access-token.ts
+import "server-only";
+import { authDb } from "./db";
 
 /**
- * Auth.js owns everything under /api/auth: the credentials callback, the session endpoint,
- * sign-out, CSRF. The Server Actions in src/lib/actions/auth.ts call into the same handlers
- * in-process, so the browser never posts here directly in this app.
+ * Reads the upstream API token belonging to a session.
+ *
+ * This exists because `returned: false` in auth.ts is thorough: it hides `accessToken`
+ * from every response body, which includes the object `auth.api.getSession()` hands back. So
+ * the token cannot be read off the session, and an app that wants it has to ask for it on
+ * purpose, from the server, with a session token it has already validated.
+ *
+ * That is the whole improvement over the Auth.js version. There the token rode along on the
+ * session object, which meant the Server Action and the public session endpoint were served
+ * by one shaping callback and a field added for the former was published by the latter. Here
+ * there is no code path in which the token is part of a session payload.
+ *
+ * Pass the `session.token` from a successful `auth.api.getSession()` call: that is what proves
+ * the caller holds a live, unrevoked session, since this query does not re-check expiry.
  */
-export const { GET, POST } = handlers;
+export function readAccessToken(sessionToken: string): string | null {
+  const row = authDb
+    .prepare("SELECT accessToken FROM session WHERE token = ?")
+    .get(sessionToken);
+  const token = row?.accessToken;
+  return typeof token === "string" && token.length > 0 ? token : null;
+}
+```
+
+One warning for later. `customSession`, Better Auth's plugin for reshaping the session response, has exactly the same shape as the old Auth.js callback and would reintroduce the leak in full. The schema flag is the mechanism that fixes it; the plugin is not.
+
+**Schema and seed, once per server.** Better Auth needs its four tables before anything reads a session. `instrumentation.ts` runs once per server instance and finishes before the first request, which is the right hook for it, and it lets Next.js resolve the imports. The migration diffs rather than guesses, so adding a field to `auth.ts` is picked up by the next start; that is also why `validateSchema` is off, since a check that runs before this function can only ever fire spuriously.
+
+```ts
+// src/lib/auth/migrate.ts
+import "server-only";
+import { getMigrations } from "better-auth/db/migration";
+import { auth } from "./auth";
+import { authDb } from "./db";
+import { DEMO_ACCOUNT } from "./demo-account";
+
+/**
+ * Creates the four tables Better Auth needs (user, session, account, verification) and the
+ * `accessToken` column auth.ts adds to the session table.
+ *
+ * `getMigrations` is the programmatic form of `npx auth migrate`, and it works because the
+ * demo uses the built-in Kysely adapter; with Prisma or Drizzle you would run their migrations
+ * instead. It is idempotent, and it diffs rather than guesses: missing tables get created,
+ * missing columns get added, so changing auth.ts is picked up by the next start.
+ */
+async function migrate() {
+  const { runMigrations } = await getMigrations(auth.options);
+  await runMigrations();
+}
+
+/**
+ * Puts the one account the demo knows into the fresh database. Better Auth owns password
+ * hashing now (scrypt, same as the hand-rolled version this replaced), so the only way to
+ * create a user with a valid credential is to go through the sign-up endpoint.
+ *
+ * Idempotent by checking first: signUpEmail would fail on the second run, and an error thrown
+ * from `register` would stop the server from coming up.
+ */
+async function ensureDemoAccount() {
+  const existing = authDb.prepare("SELECT id FROM user WHERE email = ?").get(DEMO_ACCOUNT.email);
+  if (existing) return;
+
+  await auth.api.signUpEmail({
+    body: {
+      email: DEMO_ACCOUNT.email,
+      password: DEMO_ACCOUNT.password,
+      name: DEMO_ACCOUNT.name,
+    },
+  });
+}
+
+/** Called once from instrumentation.ts, before the server takes its first request. */
+export async function prepareAuthDatabase() {
+  await migrate();
+  await ensureDemoAccount();
+}
+```
+
+```ts
+// src/instrumentation.ts
+/**
+ * Runs once per server instance, before the first request is served.
+ *
+ * Better Auth stores sessions as rows, so the schema has to exist before anything calls
+ * getSession. Doing it here rather than in a package.json script keeps the demo to one command
+ * (`pnpm dev`) and lets Next.js resolve the imports.
+ *
+ * The import is inside the guard because Next.js calls `register` in every runtime, and the
+ * auth database is `node:sqlite`. Importing it at the top of this file would drag SQLite into
+ * the edge bundle.
+ */
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { prepareAuthDatabase } = await import("@/lib/auth/migrate");
+  await prepareAuthDatabase();
+}
+```
+
+**The Route Handler and the proxy.** The handler is mounted unwrapped, which is only safe because of `returned: false`; the proxy reads the cookie and nothing else. Mounting the catch-all publishes every endpoint the config enables, so it is worth reading that list once: `emailAndPassword` brings a sign-up route with it, which the credentials provider never had, and `disabledPaths` closes it without disabling the feature the seed needs.
+
+```ts
+// src/app/api/auth/[...all]/route.ts
+import { toNextJsHandler } from "better-auth/next-js";
+import { auth } from "@/lib/auth/auth";
+
+/**
+ * Better Auth owns everything under /api/auth: sign-in, sign-out, the session endpoint, CSRF.
+ * The Server Actions in src/lib/actions/auth.ts call the same endpoints in-process through
+ * `auth.api`, so the browser never posts here directly in this app.
+ *
+ * The handler is mounted unwrapped on purpose. Under Auth.js this file needed a filter,
+ * because GET /api/auth/session served whatever the session callback had put on the session,
+ * and that included the API token the Server Action needed. Here `returned: false` in
+ * auth.ts keeps the token out of the response at the source, so there is nothing left to
+ * strip. e2e/auth.spec.ts asserts that against the running endpoint.
+ */
+export const { GET, POST } = toNextJsHandler(auth);
 ```
 
 ```ts
 // src/proxy.ts
-import NextAuth from "next-auth";
-import { authConfig } from "@/lib/auth/auth.config";
+import { getSessionCookie } from "better-auth/cookies";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { proxyRedirect } from "@/lib/auth/paths";
 
 /**
- * Runs before the matched routes render. Auth.js decodes the session cookie and hands the
- * result to the `authorized` callback in auth.config.ts, which redirects or lets the request
- * through; nothing else happens here. This is the optimistic check from the Next.js auth
- * guide: it costs no I/O and it keeps strangers off /account before anything renders, but it
- * is not the last line of defense. The page and the Server Action call auth() again.
+ * Runs before the matched routes render. `getSessionCookie` only looks for the session cookie;
+ * it does not verify the signature and it does not touch the database. That is deliberate on
+ * two counts. It is the optimistic check from both the Next.js and the Better Auth auth
+ * guides, so it costs no I/O and keeps strangers off /account before anything renders. And the
+ * proxy may be deployed to a CDN, which is why the Next.js docs tell you not to rely on shared
+ * modules here: a `node:sqlite` handle has no business in this file.
  *
- * The proxy imports auth.config.ts, not auth.ts: the credentials provider pulls in
- * node:crypto and the user table, which a redirect decision does not need. The matcher keeps
- * the proxy off every other route, so the static and cached demos are untouched.
+ * So this is not the last line of defense, and it is not meant to be. The page and the Server
+ * Action call getSession() again, which does verify and does hit the database. The matcher
+ * keeps the proxy off every other route, so the static and cached demos are untouched.
+ *
+ * It guards /account and nothing else. Sending a signed-in visitor away from /login belongs to
+ * the login page, which can verify; deciding that here, on the presence of a cookie, would
+ * trap anyone holding one whose session is gone. See proxyRedirect in lib/auth/paths.ts.
  */
-export default NextAuth(authConfig).auth;
+export function proxy(request: NextRequest) {
+  const { pathname, search } = request.nextUrl;
+  const signedIn = Boolean(getSessionCookie(request));
+  const target = proxyRedirect({ pathname, search, signedIn });
+  const permissionPolicyHeaders = [
+    "camera=()",
+    "microphone=()",
+    "geolocation=()"
+  ]
+  // You would normally NOT do this in proxy in Next.js, you do it in next.config.ts, headers prop
+  const newHeaders = new Headers(request.headers)
+  newHeaders.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload;")
+  newHeaders.set("X-Content-Type-Options", "nosniff")
+  newHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin")
+  newHeaders.set("X-Frame-Options", "DENY")
+  newHeaders.set("Permission-Policy", permissionPolicyHeaders.join(', '))
 
-export const config = { matcher: ["/account/:path*", "/login"] };
+  // we want to set our headers
+  return target
+    ? NextResponse.redirect(new URL(target, request.nextUrl.origin), {
+      headers: newHeaders
+    })
+    : NextResponse.next({
+      headers: newHeaders
+    });
+}
+
+export const config = { matcher: ["/account/:path*"] };
 ```
 
-**Sign in and sign out.** The action has the `useActionState` shape from Step 15. `signIn` runs the provider and sets the cookie on this response; wrong credentials throw `CredentialsSignin`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom.
+`getSessionCookie` does not verify the cookie or touch the database, and that is correct twice over: it is the optimistic check both auth guides describe, and the Next.js docs warn that `proxy.ts` may be deployed to a CDN and should not rely on shared modules, which a `node:sqlite` handle very much is.
+
+Notice what the proxy does *not* do: it never redirects a cookie-holder away from `/login`. The temptation is strong, and it is a trap, because the signal is presence and not validity. A cookie whose row is gone (signed out elsewhere, the gitignored database recreated) still reads as signed in here, so that redirect would send it to `/account`, which verifies for real, finds nothing, and sends it back to `/login`: a loop with the sign-in form on the far side of it. The rule that falls out is worth keeping: an unverified check may send someone *to* a verification, never away from one. The login page does its own check, below.
+
+**Sign in and sign out.** The action has the `useActionState` shape from Step 15. `auth.api.signInEmail` runs in-process; wrong credentials arrive as an `APIError` with status `UNAUTHORIZED`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom. The `nextCookies()` plugin is what actually lands the cookie, because a Server Action cannot set one by returning a header.
+
+One thing to know before copying this shape into something real: calling `auth.api.*` in-process skips the router, and the router is where Better Auth's rate limiting lives. The HTTP endpoints are throttled in production and this action is not, so a real login would add its own throttle here. The demo's credentials are printed on the page, so there is nothing to guess.
 
 ```ts
 // src/lib/actions/auth.ts
 "use server";
 
+import { APIError } from "better-auth/api";
 import type { Route } from "next";
-import { AuthError } from "next-auth";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { signIn, signOut } from "@/lib/auth/auth";
+import { auth } from "@/lib/auth/auth";
 import { ACCOUNT_PATH } from "@/lib/auth/paths";
 import { type LoginFieldErrors, parseLogin } from "@/lib/schemas/login";
 
@@ -3882,13 +4093,16 @@ export type LoginState =
   | { status: "failed"; message: string };
 
 /**
- * Form action behind useActionState. Auth.js's signIn runs the credentials provider and sets
- * the session cookie on this response. Wrong credentials surface as a CredentialsSignin
- * error, which becomes state the form can show; any other error is rethrown to error.tsx.
+ * Form action behind useActionState. `auth.api.signInEmail` runs the same code the HTTP
+ * endpoint runs, in-process: it verifies the password, writes a session row, and asks for a
+ * Set-Cookie. A Server Action cannot set a cookie by returning a header, so the nextCookies()
+ * plugin in auth.ts is what actually lands it.
  *
- * redirect() is called here rather than left to signIn (redirect: false) so the flow is
- * visible: sign in, then navigate to where the user was going. redirect() throws, so nothing
- * runs after it.
+ * Wrong credentials come back as an APIError with a 401, which becomes state the form can
+ * show. Anything else is rethrown to error.tsx.
+ *
+ * redirect() is called here rather than passed to signInEmail so the flow is visible: sign in,
+ * then navigate to where the user was going. redirect() throws, so nothing runs after it.
  */
 export async function authenticate(
   _previous: LoginState,
@@ -3900,17 +4114,14 @@ export async function authenticate(
   }
 
   try {
-    await signIn("credentials", {
-      email: data.email,
-      password: data.password,
-      redirect: false,
+    await auth.api.signInEmail({
+      body: { email: data.email, password: data.password },
     });
   } catch (error) {
-    if (error instanceof AuthError) {
+    if (error instanceof APIError) {
       return {
         status: "failed",
-        message:
-          error.type === "CredentialsSignin" ? "Wrong email or password" : "Could not sign you in",
+        message: error.status === "UNAUTHORIZED" ? "Wrong email or password" : "Could not sign you in",
       };
     }
     throw error;
@@ -3919,9 +4130,14 @@ export async function authenticate(
   redirect((data.redirectTo ?? ACCOUNT_PATH) as Route);
 }
 
-/** Clears the session cookie and returns to the home page. Bound to a plain <form action>. */
+/**
+ * Deletes the session row and clears the cookie, then returns to the home page. Bound to a
+ * plain <form action>. Unlike the Auth.js version this is a real revocation: the row is gone,
+ * so the session cannot be used again even if someone kept a copy of the cookie.
+ */
 export async function signOutAction() {
-  await signOut({ redirectTo: "/" });
+  await auth.api.signOut({ headers: await headers() });
+  redirect("/");
 }
 ```
 
@@ -4011,27 +4227,39 @@ export function LoginForm({ redirectTo }: LoginFormProps) {
 ```tsx
 // src/app/login/page.tsx
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/login-form";
 import { PageContainer } from "@/components/page-container";
 import { Panel } from "@/components/panel";
 import { DEMO_ACCOUNT } from "@/lib/auth/demo-account";
-import { safeRedirectPath } from "@/lib/auth/paths";
+import { ACCOUNT_PATH, safeRedirectPath } from "@/lib/auth/paths";
+import { getSession } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Sign in" };
 
 /**
  * A Server Component page: it reads callbackUrl from the URL (which makes the route dynamic)
- * and renders the Client Component form. The proxy sends signed-in visitors away from here.
+ * and renders the Client Component form.
+ *
+ * Sending signed-in visitors away is this page's job rather than the proxy's, because it takes
+ * a verified answer. The proxy only sees whether a cookie exists, and a cookie whose session
+ * row is gone would bounce off this page into /account, which redirects back here: a loop with
+ * no way out. Checking the session for real means a dead cookie simply lands on the form, and
+ * signing in overwrites it.
  */
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
-  const { callbackUrl } = await searchParams;
+  const [{ callbackUrl }, session] = await Promise.all([searchParams, getSession()]);
+  if (session) {
+    redirect(ACCOUNT_PATH);
+  }
   return (
     <PageContainer>
       <Panel title="Sign in">
         <p>
           The demo account is <code>{DEMO_ACCOUNT.email}</code> with the password{" "}
-          <code>{DEMO_ACCOUNT.password}</code>. The session is a JWT in an HttpOnly cookie;
-          the Odyssey API ignores it, so signing in only unlocks what this app checks itself.
+          <code>{DEMO_ACCOUNT.password}</code>. The session is a row in SQLite, keyed by an
+          HttpOnly cookie, so signing out revokes it for real; the Odyssey API ignores all of
+          it, so signing in only unlocks what this app checks itself.
         </p>
         <LoginForm redirectTo={safeRedirectPath(callbackUrl)} />
       </Panel>
@@ -4040,7 +4268,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
 }
 ```
 
-**The protected page.** The proxy already turned strangers away, but the page calls `auth()` again, next to the data it renders. That is the defense in depth the guide asks for, and it is also what makes the route dynamic: `auth()` reads cookies, so no segment config is needed.
+**The protected page.** The proxy already turned strangers away, but the page calls `getSession` again, next to the data it renders. That is the defense in depth the guide asks for, and here it is load-bearing rather than ceremonial: this call verifies the signature and loads the row, so a session revoked since the last request fails here even though its cookie satisfied the proxy.
 
 ```tsx
 // src/app/account/page.tsx
@@ -4050,8 +4278,9 @@ import { Button } from "@/components/button";
 import { PageContainer } from "@/components/page-container";
 import { Panel } from "@/components/panel";
 import { signOutAction } from "@/lib/actions/auth";
-import { auth } from "@/lib/auth/auth";
+import { readAccessToken } from "@/lib/auth/access-token";
 import { ACCOUNT_PATH, signInHref } from "@/lib/auth/paths";
+import { getSession } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Account" };
 
@@ -4059,15 +4288,19 @@ export const metadata: Metadata = { title: "Account" };
 const mask = (token: string) => `${token.slice(0, 8)}…`;
 
 /**
- * The proxy already turned strangers away, but it only looked at a cookie. The page checks
- * again with auth(), next to the data it renders: the defense in depth the Next.js auth guide
- * asks for. auth() reads cookies, which makes the route dynamic; no segment config needed.
+ * The proxy already turned strangers away, but it only looked for a cookie. The page checks
+ * again with getSession(), next to the data it renders: this call verifies the cookie's
+ * signature and loads the session row, so a revoked session fails here even though it passed
+ * the proxy. That is the defense in depth both auth guides ask for. Reading the session reads
+ * headers, which makes the route dynamic; no segment config needed.
  */
 export default async function AccountPage() {
-  const session = await auth();
-  if (!session?.user) {
+  const session = await getSession();
+  if (!session) {
     redirect(signInHref(ACCOUNT_PATH));
   }
+
+  const accessToken = readAccessToken(session.session.token);
 
   return (
     <PageContainer>
@@ -4077,9 +4310,10 @@ export default async function AccountPage() {
           {`Signed in as ${session.user.name} (${session.user.email}).`}
         </p>
         <p>
-          API token <code>{mask(session.accessToken)}</code>, issued at sign-in. The
-          register-views Server Action sends it as a bearer header on its GraphQL mutations
-          and refuses to run without a session.
+          API token <code>{accessToken ? mask(accessToken) : "none"}</code>, issued with this
+          session. The register-views Server Action sends it as a bearer header on its GraphQL
+          mutations and refuses to run without a session. It is stored on the session row as a
+          server-owned field, so no response body ever carries it, not even this page&apos;s.
         </p>
         <form action={signOutAction}>
           <Button type="submit">Sign out</Button>
@@ -4090,7 +4324,7 @@ export default async function AccountPage() {
 }
 ```
 
-**The session in a Server Action.** `registerView` from the forms step refuses to run without a session and passes the session's token to Apollo as per-operation `context`; the `SetContextLink` from Step 20 merges those headers with its own. The token does not go through the link's `getToken` slot on purpose: `auth()` reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it at the call site keeps the decision where the session is.
+**The session in a Server Action.** `registerView` from the forms step refuses to run without a session, reads the API token with `readAccessToken`, and passes it to Apollo as per-operation `context`; the `SetContextLink` from Step 20 merges those headers with its own. The token is attached at the call site rather than configured on the client on purpose: reading the session reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it per operation keeps the decision where the session is.
 
 ```ts
 // src/lib/actions/register-view.ts
@@ -4099,7 +4333,8 @@ export default async function AccountPage() {
 import { revalidatePath } from "next/cache";
 import { IncrementTrackViewsDocument } from "@/__generated__/graphql";
 import { getClient } from "@/lib/apollo/rsc-client";
-import { auth } from "@/lib/auth/auth";
+import { readAccessToken } from "@/lib/auth/access-token";
+import { getSession } from "@/lib/auth/session";
 import { type RegisterViewFieldErrors, parseRegisterView } from "@/lib/schemas/register-view";
 
 /** Returned to useActionState; must be serializable. */
@@ -4118,10 +4353,14 @@ export type RegisterViewState =
  * every "use server" export is a public endpoint. Errors are returned, not thrown, so the
  * form can show them.
  *
- * The session's token travels as per-operation context rather than through the link chain's
- * getToken: auth() reads cookies, and a link that read cookies on every operation would break
- * the cached and static routes that share the RSC client. The SetContextLink merges these
- * headers with its own.
+ * The session's token travels as per-operation context rather than being configured on the
+ * client: getSession reads cookies, and a client that read cookies on every operation would
+ * break the cached and static routes that share the RSC client. The SetContextLink merges
+ * these headers with its own.
+ *
+ * readAccessToken is a second, deliberate step because the token is a server-owned field on
+ * the session row (see auth.ts): `returned: false` hides it from every response body,
+ * including the one getSession returns, so it cannot be picked up by accident.
  *
  * revalidatePath is what makes the page update: an action that revalidates nothing returns
  * only its value and Next.js does not re-render the route. With it, the action response
@@ -4136,8 +4375,13 @@ export async function registerView(
     return { status: "invalid", fieldErrors };
   }
 
-  const session = await auth();
-  if (!session?.user) {
+  const session = await getSession();
+  if (!session) {
+    return { status: "failed", message: "Sign in to register views" };
+  }
+
+  const accessToken = readAccessToken(session.session.token);
+  if (!accessToken) {
     return { status: "failed", message: "Sign in to register views" };
   }
 
@@ -4150,7 +4394,7 @@ export async function registerView(
       const result = await client.mutate({
         mutation: IncrementTrackViewsDocument,
         variables: { trackId },
-        context: { headers: { authorization: `Bearer ${session.accessToken}` } },
+        context: { headers: { authorization: `Bearer ${accessToken}` } },
       });
       numberOfViews = result.data?.incrementTrackViews.track?.numberOfViews ?? numberOfViews;
     }
@@ -4186,7 +4430,7 @@ export function SignInPrompt({ callbackUrl }: { callbackUrl: string }) {
       <div className={styles.form} data-testid="sign-in-prompt">
         <p className={styles.label}>
           Registering views through the Server Action needs a signed-in user: the action
-          reads the session with auth() and forwards its token to the API.
+          reads the session with getSession and forwards its token to the API.
         </p>
         <Link href={signInHref(callbackUrl)}>
           <Button>Sign in to register views</Button>
@@ -4199,7 +4443,7 @@ export function SignInPrompt({ callbackUrl }: { callbackUrl: string }) {
 
 **What is not here, and why.** The header has an **Account** link, not the user's name. A session read in the root layout would make every route dynamic on this branch: `/` is `dynamic = "error"` and would fail the build, `/revalidate` would stop being ISR, `/legacy` would render with an empty cookie jar. Per-user UI in a shared layout is the case Cache Components exists for. The `use-cache` branch streams a `UserMenu` into the header behind a Suspense boundary while the shell stays static.
 
-**Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 302 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, and the Server Action response carried a `Set-Cookie` for `authjs.session-token`, HttpOnly. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out: the cookie is gone and `/account` redirects again. `e2e/auth.spec.ts` covers the flow. The unit tests cover the `authorized` decision, the token callbacks, the password hashing, the schema, the action (with `signIn` mocked and the real `CredentialsSignin`), the form, and the session check in `registerView`.
+**Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 307 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, and the Server Action response carried a `Set-Cookie` for `better-auth.session_token`, HttpOnly. Now confirm the point of the step: `curl -s -b <cookie> localhost:3000/api/auth/get-session` returns the user and no `accessToken`, while `sqlite3 .auth.sqlite 'select accessToken from session'` shows the token the page just rendered. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out and check the table: the row is gone, not merely the cookie. `e2e/auth.spec.ts` covers the flow, including a replay of a cookie captured before sign-out and the assertion that the session endpoint leaks nothing; flip `returned` to `true` and that one test fails while everything else stays green, which is how quietly the original bug hid. The unit tests cover `proxyRedirect`, the schema, the action (with `signInEmail` mocked and a real `APIError`), the form, and the session and token checks in `registerView`.
 
 ## Step 22: Metadata: file conventions and Open Graph images
 
@@ -4413,8 +4657,6 @@ export default defineConfig({
     environment: "happy-dom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
-    // next-auth imports `next/server` without an extension; let Vite resolve it instead of Node.
-    server: { deps: { inline: ["next-auth"] } },
   },
 });
 ```
@@ -4515,7 +4757,7 @@ const PORT = Number(process.env.E2E_PORT ?? 3000);
 export const REVALIDATE_SECRET = "e2e-only-secret";
 
 /** Signs the session cookie of the server under test; `next start` does not load .env.development. */
-const AUTH_SECRET = "e2e-only-auth-secret";
+const BETTER_AUTH_SECRET = "e2e-only-auth-secret-at-least-32-chars";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -4534,7 +4776,13 @@ export default defineConfig({
     // Always build and start our own server: an existing one may lack these secrets.
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { REVALIDATE_SECRET, AUTH_SECRET },
+    // BETTER_AUTH_URL pins the origin to the port under test, so Better Auth needs no host allowlist.
+    env: {
+      REVALIDATE_SECRET,
+      BETTER_AUTH_SECRET,
+      BETTER_AUTH_URL: `http://localhost:${PORT}`,
+      AUTH_DB_PATH: ".auth.e2e.sqlite",
+    },
   },
 });
 ```
