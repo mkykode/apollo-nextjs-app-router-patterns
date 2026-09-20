@@ -626,6 +626,28 @@ All the motion is CSS, in the view-transitions section at the end of `src/app/gl
 
 **Check:** on http://localhost:3000/use-cache click a card: the cover grows into the detail cover while the page slides left. Click **All tracks**: the page slides right and the cover shrinks back into its card. On http://localhost:3000/rsc click a card: the page slides in showing the route's loading skeleton, the content crossfades over it, and the cover does not morph. On http://localhost:3000/suspense type in the filter box: the results crossfade. Press the browser's back button anywhere: no slide, the browser navigation carries no type. Enable **Emulate CSS media feature prefers-reduced-motion** in DevTools and everything snaps. `e2e/view-transitions.spec.ts` records every `document.startViewTransition` call with its types and, with the durations stretched by an injected stylesheet, catches the running animations by name: `vt-blur` proves the morph pair formed on `/use-cache`; on `/rsc` it checks the slide and the second, untyped transition of the reveal.
 
+## Step: Activity: hide a component instead of destroying it
+
+`{isOpen && <Panel />}` is the reflex for showing and hiding, and it is destructive: unmounting throws away the component's state, its DOM, and anything it had fetched. React's `<Activity>` is the non-destructive version. `mode="hidden"` keeps the children mounted, hides them with `display: none`, and cleans up their Effects, so conceptually they are unmounted, except that everything is still there when you come back.
+
+That buys two separate things, and the component below is built so you can watch both against the unmounting version with one checkbox.
+
+**State and DOM survive.** The draft note is an uncontrolled `<textarea>`: React is not holding that string anywhere, it lives in the DOM node. Unmount the panel and it is gone; hide it and the same node is still in the document with the text still in it. This is why Activity suits tabs, filter panels, and wizards, where throwing away what the user typed is the wrong default.
+
+**Hidden content still renders, so its data arrives early.** Children of a hidden Activity render at a lower priority, and a query underneath one starts while the tab is still hidden. The quick look suspends on `GetTrack` for a track this page has not fetched, so Apollo is already in flight before the first click and there is nothing left to wait for. Note where the Suspense boundary sits: above both Activities, as in React's own example. A hidden Activity that suspends does not trip it, which is what keeps the pre-render invisible.
+
+@@include(src/components/activity-tabs.tsx)@@
+
+Render it under the detail on `src/app/background/track/[trackId]/page.tsx`, in its own Suspense boundary so the detail above does not wait for the track list.
+
+This is the same goal as this route's `useBackgroundQuery`, reached from the other end. `useBackgroundQuery` starts a request early by hoisting the hook; Activity starts it early by rendering the whole component early. Reach for the hook when you know exactly which query to warm, and for the boundary when you want a whole subtree ready.
+
+One honest limit, and it is Apollo's rather than React's: unmounting does not reliably send the quick look back to a loading state. Apollo keeps a resolved query ref in its suspense cache for a while after unmount, so remounting inside that window does not suspend. The difference you can always rely on is structural, and it is the one the tests assert: with Activity the hidden panel exists, and without it there is no panel at all.
+
+**Check:** on http://localhost:3000/background/track/c_0, open the Network tab and reload. A `GetTrack` request goes out for a track you have not opened: that is the hidden tab. Type into the draft note, switch to **Quick look** (it appears with no fallback), and switch back: the draft is still there. Untick the box and repeat: the draft is gone, and in the Elements panel the hidden panel is no longer in the document at all. `e2e/activity.spec.ts` asserts all three, and `src/components/activity-tabs.test.tsx` covers the same behaviour in jsdom.
+
+Next.js is already doing this for you one level up on this branch: Cache Components hides whole routes with Activity instead of unmounting them, so page state survives back and forward navigation with no work from you. That is the router's doing, not this component's. Using `<Activity>` directly is what you reach for inside a page, and it is why this step behaves identically on the `dynamic` branch, where the router does none of it.
+
 ## Step: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
 Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the cases that do, keep the reactive part of an effect apart from the part that only needs the latest values, and recognize the cases that do not need an effect at all.

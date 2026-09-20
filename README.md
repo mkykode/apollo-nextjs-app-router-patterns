@@ -260,6 +260,11 @@ export default eslintConfig;
 # Optional. Where the demo's SQLite session database lives. Defaults to ./.auth.sqlite,
 # which instrumentation.ts creates and seeds on server start.
 # AUTH_DB_PATH=
+
+# The app's own origin. Set this in any deployment: it pins the base URL Better Auth builds
+# and the origins it trusts. Left unset, auth.ts falls back to a localhost allowlist, which is
+# only right for development.
+# BETTER_AUTH_URL=https://example.com
 ```
 
 **Check:** `pnpm exec next --version` prints `Next.js 16.x`, and `pnpm lint` runs without complaining about the config.
@@ -1298,6 +1303,7 @@ function TracksReader({ queryRef }: { queryRef: QueryRef<GetTracksQuery> }) {
 import { type QueryRef, useBackgroundQuery, useReadQuery } from "@apollo/client/react";
 import { Suspense, use } from "react";
 import { type GetTrackQuery, GetTrackDocument } from "@/__generated__/graphql";
+import { ActivityTabs } from "@/components/activity-tabs";
 import { Loading } from "@/components/loading";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
@@ -1310,6 +1316,11 @@ export default function BackgroundTrackPage({ params }: PageProps<"/background/t
     <PageContainer>
       <Suspense fallback={<Loading />}>
         <TrackReader queryRef={queryRef} />
+      </Suspense>
+      {/* Its own boundary: ActivityTabs suspends on the track list, and the detail above
+          should not wait for it. */}
+      <Suspense fallback={null}>
+        <ActivityTabs currentTrackId={trackId} />
       </Suspense>
     </PageContainer>
   );
@@ -3218,6 +3229,197 @@ All the motion is CSS, in the view-transitions section at the end of `src/app/gl
 
 **Check:** on http://localhost:3000/use-cache click a card: the cover grows into the detail cover while the page slides left. Click **All tracks**: the page slides right and the cover shrinks back into its card. On http://localhost:3000/rsc click a card: the page slides in showing the route's loading skeleton, the content crossfades over it, and the cover does not morph. On http://localhost:3000/suspense type in the filter box: the results crossfade. Press the browser's back button anywhere: no slide, the browser navigation carries no type. Enable **Emulate CSS media feature prefers-reduced-motion** in DevTools and everything snaps. `e2e/view-transitions.spec.ts` records every `document.startViewTransition` call with its types and, with the durations stretched by an injected stylesheet, catches the running animations by name: `vt-blur` proves the morph pair formed on `/use-cache`; on `/rsc` it checks the slide and the second, untyped transition of the reveal.
 
+## Step: Activity: hide a component instead of destroying it
+
+`{isOpen && <Panel />}` is the reflex for showing and hiding, and it is destructive: unmounting throws away the component's state, its DOM, and anything it had fetched. React's `<Activity>` is the non-destructive version. `mode="hidden"` keeps the children mounted, hides them with `display: none`, and cleans up their Effects, so conceptually they are unmounted, except that everything is still there when you come back.
+
+That buys two separate things, and the component below is built so you can watch both against the unmounting version with one checkbox.
+
+**State and DOM survive.** The draft note is an uncontrolled `<textarea>`: React is not holding that string anywhere, it lives in the DOM node. Unmount the panel and it is gone; hide it and the same node is still in the document with the text still in it. This is why Activity suits tabs, filter panels, and wizards, where throwing away what the user typed is the wrong default.
+
+**Hidden content still renders, so its data arrives early.** Children of a hidden Activity render at a lower priority, and a query underneath one starts while the tab is still hidden. The quick look suspends on `GetTrack` for a track this page has not fetched, so Apollo is already in flight before the first click and there is nothing left to wait for. Note where the Suspense boundary sits: above both Activities, as in React's own example. A hidden Activity that suspends does not trip it, which is what keeps the pre-render invisible.
+
+```tsx
+// src/components/activity-tabs.tsx
+"use client";
+
+import { useSuspenseQuery } from "@apollo/client/react";
+import { Activity, Suspense, useState } from "react";
+import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import { ContentSection } from "./content-section";
+import styles from "./activity-tabs.module.css";
+
+type Tab = "notes" | "quick-look";
+
+/**
+ * React's <Activity>, doing both of the jobs it exists for.
+ *
+ * Conditional rendering destroys a component: `{isOpen && <Panel />}` unmounts it, and its
+ * state and its DOM go with it. <Activity mode="hidden"> keeps the component mounted, hides
+ * it with `display: none`, and tears down its Effects, so it behaves like an unmounted
+ * component that happens to remember everything.
+ *
+ * Two consequences, one checkbox to watch them both:
+ *
+ * 1. State survives. The draft note is an uncontrolled <textarea>, so the text is DOM state
+ *    and nothing in React is holding it. Unmounted, it is gone; hidden, the DOM node is still
+ *    there and so is the draft.
+ * 2. Hidden content still renders, at a lower priority, so a query underneath it starts
+ *    early. The quick look suspends on GetTrack for a track this page has not fetched. While
+ *    the tab is hidden, Apollo is already in flight, so the first click has no fallback to
+ *    show. That is the pre-render the React docs describe, and it is the same idea as this
+ *    route's useBackgroundQuery, moved up to the boundary instead of the hook.
+ *
+ * Note the Suspense boundary sits above both Activities, as in React's own example. A hidden
+ * Activity that suspends does not trip it: that is what makes the pre-render invisible.
+ */
+export function ActivityTabs({ currentTrackId }: { currentTrackId: string }) {
+  const { data } = useSuspenseQuery(GetTracksDocument);
+  const others = data.tracksForHome.filter(({ id }) => id !== currentTrackId);
+  // The last one, not the first: /suspense's TrackPreview defaults to others[0], and sharing a
+  // track between the two demos would let one warm the other's cache and hide the point here.
+  const quickLookId = others.at(-1)?.id ?? currentTrackId;
+
+  const [tab, setTab] = useState<Tab>("notes");
+  const [hideWithActivity, setHideWithActivity] = useState(true);
+
+  return (
+    <ContentSection>
+      <section className={styles.panel} aria-labelledby="activity-tabs-heading">
+        <h4 id="activity-tabs-heading">Hide a tab without unmounting it</h4>
+        <p className={styles.label}>
+          The quick look below has already rendered and fetched its track, even though you have
+          not opened it: look for its GetTrack request in the network tab. Type a draft note,
+          switch tabs and come back, and the draft is still there too. Untick the box to hide by
+          unmounting instead: the hidden panel stops existing, and the draft goes with it.
+        </p>
+
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={hideWithActivity}
+            onChange={(event) => setHideWithActivity(event.target.checked)}
+          />
+          Hide with &lt;Activity&gt; instead of unmounting
+        </label>
+
+        <div className={styles.tabs} role="tablist" aria-label="Track panel">
+          <TabButton tab="notes" activeTab={tab} onSelect={setTab}>
+            Notes
+          </TabButton>
+          <TabButton tab="quick-look" activeTab={tab} onSelect={setTab}>
+            Quick look
+          </TabButton>
+        </div>
+
+        <div className={styles.panels}>
+          <Suspense fallback={<p className={styles.fallback}>Loading quick look...</p>}>
+            {hideWithActivity ? (
+              <>
+                <Activity mode={tab === "notes" ? "visible" : "hidden"}>
+                  <Notes />
+                </Activity>
+                <Activity mode={tab === "quick-look" ? "visible" : "hidden"}>
+                  <QuickLook trackId={quickLookId} />
+                </Activity>
+              </>
+            ) : (
+              <>
+                {tab === "notes" && <Notes />}
+                {tab === "quick-look" && <QuickLook trackId={quickLookId} />}
+              </>
+            )}
+          </Suspense>
+        </div>
+      </section>
+    </ContentSection>
+  );
+}
+
+function TabButton({
+  tab,
+  activeTab,
+  onSelect,
+  children,
+}: {
+  tab: Tab;
+  activeTab: Tab;
+  onSelect: (tab: Tab) => void;
+  children: string;
+}) {
+  const isActive = tab === activeTab;
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`activity-tab-${tab}`}
+      aria-selected={isActive}
+      aria-controls={`activity-panel-${tab}`}
+      className={styles.tab}
+      data-active={isActive}
+      onClick={() => onSelect(tab)}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Uncontrolled on purpose. The text lives only in the DOM node, so it is the clearest possible
+ * demonstration: React is not holding this value anywhere, and it survives purely because
+ * Activity left the element in the document.
+ */
+function Notes() {
+  return (
+    <div
+      role="tabpanel"
+      id="activity-panel-notes"
+      aria-labelledby="activity-tab-notes"
+      data-testid="activity-notes"
+    >
+      <label className={styles.field}>
+        Draft note
+        <textarea
+          className={styles.textarea}
+          rows={3}
+          placeholder="Type here, switch tabs, come back."
+        />
+      </label>
+    </div>
+  );
+}
+
+function QuickLook({ trackId }: { trackId: string }) {
+  const { data } = useSuspenseQuery(GetTrackDocument, { variables: { trackId } });
+  const { title, author, modulesCount, length, numberOfViews } = data.track;
+
+  return (
+    <div
+      role="tabpanel"
+      id="activity-panel-quick-look"
+      aria-labelledby="activity-tab-quick-look"
+      data-testid="activity-quick-look"
+    >
+      <p className={styles.quickLook}>
+        <strong>{title}</strong> by {author.name}: {modulesCount ?? 0} modules,{" "}
+        {humanReadableTimeFromSeconds(length ?? 0)}, {numberOfViews ?? 0} view(s)
+      </p>
+    </div>
+  );
+}
+```
+
+Render it under the detail on `src/app/background/track/[trackId]/page.tsx`, in its own Suspense boundary so the detail above does not wait for the track list.
+
+This is the same goal as this route's `useBackgroundQuery`, reached from the other end. `useBackgroundQuery` starts a request early by hoisting the hook; Activity starts it early by rendering the whole component early. Reach for the hook when you know exactly which query to warm, and for the boundary when you want a whole subtree ready.
+
+One honest limit, and it is Apollo's rather than React's: unmounting does not reliably send the quick look back to a loading state. Apollo keeps a resolved query ref in its suspense cache for a while after unmount, so remounting inside that window does not suspend. The difference you can always rely on is structural, and it is the one the tests assert: with Activity the hidden panel exists, and without it there is no panel at all.
+
+**Check:** on http://localhost:3000/background/track/c_0, open the Network tab and reload. A `GetTrack` request goes out for a track you have not opened: that is the hidden tab. Type into the draft note, switch to **Quick look** (it appears with no fallback), and switch back: the draft is still there. Untick the box and repeat: the draft is gone, and in the Elements panel the hidden panel is no longer in the document at all. `e2e/activity.spec.ts` asserts all three, and `src/components/activity-tabs.test.tsx` covers the same behaviour in jsdom.
+
+Next.js is already doing this for you one level up on this branch: Cache Components hides whole routes with Activity instead of unmounting them, so page state survives back and forward navigation with no work from you. That is the router's doing, not this component's. Using `<Activity>` directly is what you reach for inside a page, and it is why this step behaves identically on the `dynamic` branch, where the router does none of it.
+
 ## Step: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
 Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the cases that do, keep the reactive part of an effect apart from the part that only needs the latest values, and recognize the cases that do not need an effect at all.
@@ -3718,6 +3920,15 @@ export const signInHref = (callbackUrl: string): Route =>
  * Where the proxy should send a request, or null to let it through. Keeping the decision here
  * as a pure function is what makes it testable: the proxy supplies nothing but `signedIn`,
  * read from the presence of the session cookie, so there is no request or database to fake.
+ *
+ * It only ever guards protected routes, never /login, and that asymmetry is the whole lesson
+ * of an optimistic check. `signedIn` means "a session cookie is present", not "the session is
+ * good". Bouncing a cookie-holder off the sign-in page would trap anyone whose cookie outlives
+ * its row (signed out elsewhere, row deleted, the gitignored database recreated): /account
+ * verifies, finds nothing, and redirects to /login, which would bounce them back to /account
+ * forever, with no way to reach the form that fixes it. Sending a stranger *to* a check is
+ * safe; sending them away from one on an unverified signal is not. /login does its own
+ * verified check instead.
  */
 export function proxyRedirect({
   pathname,
@@ -3730,9 +3941,6 @@ export function proxyRedirect({
 }): Route | null {
   if (isProtectedPath(pathname)) {
     return signedIn ? null : signInHref(pathname + search);
-  }
-  if (pathname === SIGN_IN_PATH && signedIn) {
-    return ACCOUNT_PATH as Route;
   }
   return null;
 }
@@ -3786,13 +3994,31 @@ export const auth = betterAuth({
    * may be used to build the request's base URL, and they become trusted origins for the
    * endpoints' CSRF check; anything else takes the fallback rather than throwing, which keeps
    * `next dev -p 4000` working. A deployment sets BETTER_AUTH_URL and skips the list.
+   *
+   * No `protocol` here on purpose. It looks like the way to say "this is local development",
+   * but it is read by the cookie builder too, and `"http"` turns off `Secure` and the
+   * `__Secure-` prefix on the session cookie for good: not just in dev, but in a production
+   * deploy that forgot to set BETTER_AUTH_URL, where the object below is what applies. Better
+   * Auth already derives `http://` for loopback hosts, so leaving it out costs nothing in dev
+   * and stops the fallback from being worse than having no fallback at all.
    */
   baseURL: process.env.BETTER_AUTH_URL ?? {
     allowedHosts: ["localhost:3000", "localhost:3001"],
-    protocol: "http",
     fallback: "http://localhost:3000",
   },
   emailAndPassword: { enabled: true },
+  /**
+   * Enabling email and password also mounts POST /api/auth/sign-up/email, and the catch-all
+   * route hands it straight to the browser. The Auth.js credentials provider had no such
+   * endpoint, so this is new public surface: anyone could create rows in the demo's SQLite
+   * file. This closes the HTTP route with a 404.
+   *
+   * The check runs in the router's `onRequest`, which only sees requests that arrive over
+   * HTTP, so migrate.ts can still seed the demo user by calling `auth.api.signUpEmail`
+   * in-process. That split is the reason to disable the path rather than the feature:
+   * `emailAndPassword.disableSignUp` would turn off the seed too.
+   */
+  disabledPaths: ["/sign-up/email"],
   session: {
     expiresIn: SESSION_EXPIRES_IN,
     updateAge: SESSION_UPDATE_AGE,
@@ -3982,7 +4208,7 @@ export async function register() {
 }
 ```
 
-**The Route Handler and the proxy.** The handler is mounted unwrapped, which is only safe because of `returned: false`; the proxy reads the cookie and nothing else.
+**The Route Handler and the proxy.** The handler is mounted unwrapped, which is only safe because of `returned: false`; the proxy reads the cookie and nothing else. Mounting the catch-all publishes every endpoint the config enables, so it is worth reading that list once: `emailAndPassword` brings a sign-up route with it, which the credentials provider never had, and `disabledPaths` closes it without disabling the feature the seed needs.
 
 ```ts
 // src/app/api/auth/[...all]/route.ts
@@ -4019,24 +4245,50 @@ import { proxyRedirect } from "@/lib/auth/paths";
  * modules here: a `node:sqlite` handle has no business in this file.
  *
  * So this is not the last line of defense, and it is not meant to be. The page and the Server
- * Action call auth.api.getSession() again, which does verify and does hit the database. The
- * matcher keeps the proxy off every other route, so the static and cached demos are untouched.
+ * Action call getSession() again, which does verify and does hit the database. The matcher
+ * keeps the proxy off every other route, so the static and cached demos are untouched.
+ *
+ * It guards /account and nothing else. Sending a signed-in visitor away from /login belongs to
+ * the login page, which can verify; deciding that here, on the presence of a cookie, would
+ * trap anyone holding one whose session is gone. See proxyRedirect in lib/auth/paths.ts.
  */
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const signedIn = Boolean(getSessionCookie(request));
   const target = proxyRedirect({ pathname, search, signedIn });
+  const permissionPolicyHeaders = [
+    "camera=()",
+    "microphone=()",
+    "geolocation=()"
+  ]
+  // You would normally NOT do this in proxy in Next.js, you do it in next.config.ts, headers prop
+  const newHeaders = new Headers(request.headers)
+  newHeaders.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload;")
+  newHeaders.set("X-Content-Type-Options", "nosniff")
+  newHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin")
+  newHeaders.set("X-Frame-Options", "DENY")
+  newHeaders.set("Permission-Policy", permissionPolicyHeaders.join(', '))
+
+  // we want to set our headers
   return target
-    ? NextResponse.redirect(new URL(target, request.nextUrl.origin))
-    : NextResponse.next();
+    ? NextResponse.redirect(new URL(target, request.nextUrl.origin), {
+      headers: newHeaders
+    })
+    : NextResponse.next({
+      headers: newHeaders
+    });
 }
 
-export const config = { matcher: ["/account/:path*", "/login"] };
+export const config = { matcher: ["/account/:path*"] };
 ```
 
 `getSessionCookie` does not verify the cookie or touch the database, and that is correct twice over: it is the optimistic check both auth guides describe, and the Next.js docs warn that `proxy.ts` may be deployed to a CDN and should not rely on shared modules, which a `node:sqlite` handle very much is.
 
+Notice what the proxy does *not* do: it never redirects a cookie-holder away from `/login`. The temptation is strong, and it is a trap, because the signal is presence and not validity. A cookie whose row is gone (signed out elsewhere, the gitignored database recreated) still reads as signed in here, so that redirect would send it to `/account`, which verifies for real, finds nothing, and sends it back to `/login`: a loop with the sign-in form on the far side of it. The rule that falls out is worth keeping: an unverified check may send someone *to* a verification, never away from one. The login page does its own check, below.
+
 **Sign in and sign out.** The action has the `useActionState` shape from @@step(Forms: a Server Action and a client mutation)@@. `auth.api.signInEmail` runs in-process; wrong credentials arrive as an `APIError` with status `UNAUTHORIZED`, which becomes state; then the action calls `redirect()` itself, so the flow reads top to bottom. The `nextCookies()` plugin is what actually lands the cookie, because a Server Action cannot set one by returning a header.
+
+One thing to know before copying this shape into something real: calling `auth.api.*` in-process skips the router, and the router is where Better Auth's rate limiting lives. The HTTP endpoints are throttled in production and this action is not, so a real login would add its own throttle here. The demo's credentials are printed on the page, so there is nothing to guess.
 
 ```ts
 // src/lib/actions/auth.ts
@@ -4191,20 +4443,31 @@ export function LoginForm({ redirectTo }: LoginFormProps) {
 ```tsx
 // src/app/login/page.tsx
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/login-form";
 import { PageContainer } from "@/components/page-container";
 import { Panel } from "@/components/panel";
 import { DEMO_ACCOUNT } from "@/lib/auth/demo-account";
-import { safeRedirectPath } from "@/lib/auth/paths";
+import { ACCOUNT_PATH, safeRedirectPath } from "@/lib/auth/paths";
+import { getSession } from "@/lib/auth/session";
 
 export const metadata: Metadata = { title: "Sign in" };
 
 /**
  * A Server Component page: it reads callbackUrl from the URL (which makes the route dynamic)
- * and renders the Client Component form. The proxy sends signed-in visitors away from here.
+ * and renders the Client Component form.
+ *
+ * Sending signed-in visitors away is this page's job rather than the proxy's, because it takes
+ * a verified answer. The proxy only sees whether a cookie exists, and a cookie whose session
+ * row is gone would bounce off this page into /account, which redirects back here: a loop with
+ * no way out. Checking the session for real means a dead cookie simply lands on the form, and
+ * signing in overwrites it.
  */
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
-  const { callbackUrl } = await searchParams;
+  const [{ callbackUrl }, session] = await Promise.all([searchParams, getSession()]);
+  if (session) {
+    redirect(ACCOUNT_PATH);
+  }
   return (
     <PageContainer>
       <Panel title="Sign in">

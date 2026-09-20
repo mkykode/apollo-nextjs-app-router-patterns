@@ -1,0 +1,77 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  margin-bottom: 30px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-dark);
+  background-color: var(--silver-lighter);
+}
+
+.panel h4 {
+  font-size: 1.2em;
+}
+
+.label {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.tab {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-darker);
+  font: inherit;
+  color: var(--color-text-secondary);
+  background-color: white;
+  cursor: pointer;
+}
+
+.tab[data-active="true"] {
+  color: var(--color-text);
+  border-color: var(--color-text);
+  font-weight: 600;
+}
+
+.panels {
+  min-height: 5em;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-secondary);
+}
+
+.textarea {
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: solid 1px var(--silver-darker);
+  font: inherit;
+  color: var(--color-text);
+  background-color: white;
+  resize: vertical;
+}
+
+.quickLook {
+  margin: 0;
+}
+
+.fallback {
+  color: var(--grey-light);
+}
