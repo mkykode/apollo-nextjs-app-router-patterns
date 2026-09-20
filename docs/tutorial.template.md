@@ -666,8 +666,28 @@ Not every "latest value" problem is an Effect Event. `src/lib/hooks/use-debounce
 | Compute derived state in an effect and store it | Compute it during render | `others` in `TrackPreview`, `active` in `PatternNav` |
 | React to a click or submit in an effect | Do the work in the handler | Both forms and `TrackCard` |
 | Reset state when a prop changes | Give the component a `key` so React remounts it | Add `key={trackId}` to a component that keeps per-track state |
-| Read an external store's value in an effect | `useSyncExternalStore` | The pattern to reach for if the resize listener ever needs the width as state |
+| Read an external store's value in an effect | `useSyncExternalStore` | `src/lib/viewport-store.ts`, read by `ViewportPanel`, below |
 | Notify the parent from an effect | Call the callback in the handler that caused the change | `onOpen` in `TrackCard` |
+
+**`useSyncExternalStore`: state that lives outside React.** The last row deserves its own component, because the App Router makes it sharper than the React docs do. An external store is state React does not own and is not told about: the viewport, `localStorage`, a socket, anything with its own listeners. The instinct is an effect that reads the value and calls `setState`, which renders once with a placeholder and corrects itself after paint, and lets two components reading the same store disagree inside one commit. `useSyncExternalStore` closes both: React reads the store during render and re-checks it before committing.
+
+The store is a plain object, and nothing about it is React-specific.
+
+@@include(src/lib/viewport-store.ts)@@
+
+Note what is *not* at module scope. `window.matchMedia` runs on first use, because this module is reachable from the server's module graph and touching `matchMedia` on import would crash the render.
+
+The hook takes three arguments and the third is the one that matters here.
+
+@@include(src/components/viewport-panel.tsx)@@
+
+Render it under `QueryResult` in `src/app/legacy/track/[trackId]/page.tsx`.
+
+**`getServerSnapshot` is not optional, and it is a decision.** Omit it and React throws during SSR: *"Missing getServerSnapshot, which is required for server-rendered content."* It cannot guess, because there is no browser. But supplying it does not make the problem go away, it just moves it somewhere you control: the server emits one HTML document that any screen may hydrate, so whatever constant you return will be wrong for some visitors. React hydrates with the server value, re-reads `getSnapshot`, and re-renders with the truth, which the user sees as a flash of the wrong layout. Choose the value most of your traffic hydrates into, and keep anything that must be correct on first paint in a CSS media query, which needs no JavaScript and no snapshot.
+
+The other trap is `getSnapshot`. It must return the same value, by `Object.is`, for as long as the store has not changed. Returning `{ isNarrow: mql.matches }` builds a new object every call, React decides the store changed, and it renders forever. A boolean is safe for free; an object has to be cached.
+
+**Check:** on http://localhost:3000/legacy/track/c_11, both readouts say **wide** on a desktop. Narrow the window past 768px: **This browser, now** flips to narrow while **Server snapshot** does not, and nothing in the component holds state. Now run `curl -s localhost:3000/legacy/track/c_11 | grep data-viewport` from a terminal: the markup says `wide` no matter what your window is doing, because the server was never asked. `e2e/viewport-store.spec.ts` proves exactly that pair, fetching the HTML with no browser and then loading the same URL in a 480px one. `src/components/viewport-panel.test.tsx` renders it with `renderToString` and no `matchMedia` at all, so if the server render ever reached for the browser the test would throw.
 
 **Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation. In the Chrome console, `getEventListeners(window).resize.length` stays at 1 while you navigate between patterns; put `measure` back in the dependency array and watch it get removed and re-added on every click.
 
