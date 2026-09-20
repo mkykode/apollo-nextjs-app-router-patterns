@@ -62,15 +62,16 @@ The reference material (pattern table, architecture diagram, interview talking p
 15. [Forms: a Server Action and a client mutation](#step-15-forms-a-server-action-and-a-client-mutation)
 16. [Transitions: keep the old UI while the new one loads](#step-16-transitions-keep-the-old-ui-while-the-new-one-loads)
 17. [View transitions: continuity between pages](#step-17-view-transitions-continuity-between-pages)
-18. [Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all](#step-18-effects-uselayouteffect-useeffect-useeffectevent-and-no-effect-at-all)
-19. [Apollo local state: reactive variables and client fields](#step-19-apollo-local-state-reactive-variables-and-client-fields)
-20. [The link chain](#step-20-the-link-chain)
-21. [Authentication: Better Auth, the proxy, and the session in Server Actions](#step-21-authentication-better-auth-the-proxy-and-the-session-in-server-actions)
-22. [Metadata: file conventions and Open Graph images](#step-22-metadata-file-conventions-and-open-graph-images)
-23. [Errors and retry](#step-23-errors-and-retry)
-24. [Tests](#step-24-tests)
-25. [Build and ship](#step-25-build-and-ship)
-26. [What you learned](#what-you-learned)
+18. [Activity: hide a component instead of destroying it](#step-18-activity-hide-a-component-instead-of-destroying-it)
+19. [Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all](#step-19-effects-uselayouteffect-useeffect-useeffectevent-and-no-effect-at-all)
+20. [Apollo local state: reactive variables and client fields](#step-20-apollo-local-state-reactive-variables-and-client-fields)
+21. [The link chain](#step-21-the-link-chain)
+22. [Authentication: Better Auth, the proxy, and the session in Server Actions](#step-22-authentication-better-auth-the-proxy-and-the-session-in-server-actions)
+23. [Metadata: file conventions and Open Graph images](#step-23-metadata-file-conventions-and-open-graph-images)
+24. [Errors and retry](#step-24-errors-and-retry)
+25. [Tests](#step-25-tests)
+26. [Build and ship](#step-26-build-and-ship)
+27. [What you learned](#what-you-learned)
 
 Each step ends with a **Check**. Do the check before moving on.
 
@@ -181,15 +182,42 @@ pnpm install
 // next.config.ts
 import type { NextConfig } from "next";
 
+const securityHeaders = [
+    {
+        key: "Strict-Transport-Security", value: "maxAge=31536000; includeSubDomains; preload"
+    },
+    {
+        key: "X-Content-Type-Options", value: "nosniff"
+    },
+    {
+        key: "Referrer-Policy",
+        value: "strict-origin-when-cross-origin",
+    },
+    {
+        key: "X-Frame-Options", value: "DENY",
+    },
+    {
+        key: "Permission-Policu", value: "camere=(), microphone=(), gelocation=()"
+    }
+]
+
 const nextConfig: NextConfig = {
-  typedRoutes: true,
-  images: {
-    remotePatterns: [
-      // Restricted to the paths the Odyssey API serves, so the optimizer cannot be used as an open proxy.
-      { protocol: "https", hostname: "res.cloudinary.com", pathname: "/apollographql/**" },
-      { protocol: "https", hostname: "images.unsplash.com", pathname: "/photo-*" },
-    ],
-  },
+    typedRoutes: true,
+    images: {
+        remotePatterns: [
+            // Restricted to the paths the Odyssey API serves, so the optimizer cannot be used as an open proxy.
+            { protocol: "https", hostname: "res.cloudinary.com", pathname: "/apollographql/**" },
+            { protocol: "https", hostname: "images.unsplash.com", pathname: "/photo-*" },
+        ],
+    },
+    async headers() {
+        return [
+            {
+                source: "/(.*)",
+                headers: securityHeaders
+            }
+        ]
+    }
 };
 
 export default nextConfig;
@@ -633,7 +661,7 @@ export function ApolloWrapper({ children }: PropsWithChildren) {
 }
 ```
 
-Both factories call `createCache()` and `createLinkChain()` instead of `new InMemoryCache()` and `new HttpLink()`. Treat them as exactly that for now; Step 19 and Step 20 open them up.
+Both factories call `createCache()` and `createLinkChain()` instead of `new InMemoryCache()` and `new HttpLink()`. Treat them as exactly that for now; Step 20 and Step 21 open them up.
 
 You already render `<ApolloWrapper>{children}</ApolloWrapper>` in the layout from Step 3. A common worry: does a Client Component wrapper in the root layout turn every page into a Client Component? No. `"use client"` is a boundary in the module **import** graph. A Client Component makes what it imports client code; what it receives as `children` was rendered on the server already and arrives as a slot. Context never reaches Server Components, so the provider is invisible to them.
 
@@ -1307,6 +1335,7 @@ function TracksReader({ queryRef }: { queryRef: QueryRef<GetTracksQuery> }) {
 import { type QueryRef, useBackgroundQuery, useReadQuery } from "@apollo/client/react";
 import { Suspense, use } from "react";
 import { type GetTrackQuery, GetTrackDocument } from "@/__generated__/graphql";
+import { ActivityTabs } from "@/components/activity-tabs";
 import { Loading } from "@/components/loading";
 import { PageContainer } from "@/components/page-container";
 import { TrackDetail } from "@/components/track-detail";
@@ -1319,6 +1348,11 @@ export default function BackgroundTrackPage({ params }: PageProps<"/background/t
     <PageContainer>
       <Suspense fallback={<Loading />}>
         <TrackReader queryRef={queryRef} />
+      </Suspense>
+      {/* Its own boundary: ActivityTabs suspends on the track list, and the detail above
+          should not wait for it. */}
+      <Suspense fallback={null}>
+        <ActivityTabs currentTrackId={trackId} />
       </Suspense>
     </PageContainer>
   );
@@ -2333,7 +2367,7 @@ export function parseRegisterView(formData: FormData) {
 
 The same function runs in the browser before a submit and on the server inside the action or, for the client form, next to the GraphQL server's own validation. `FormData` values are strings, which is what `z.coerce` is for.
 
-**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip. The session check and the `context` on the mutation come from Step 21; ignore them until then.
+**The Server Action form.** The action has the `(previousState, formData)` shape that `useActionState` expects, validates again, returns errors as state instead of throwing, and runs one mutation per view with the RSC client. The `revalidatePath` call is not optional: an action that revalidates nothing returns only its value and Next.js does not re-render the route. With it, the same response carries the re-rendered page, so `TrackDetail` shows the new count in one roundtrip. The session check and the `context` on the mutation come from Step 22; ignore them until then.
 
 ```ts
 // src/lib/actions/register-view.ts
@@ -3204,7 +3238,198 @@ All the motion is CSS, in the view-transitions section at the end of `src/app/gl
 
 **Check:** on http://localhost:3000/revalidate click a card: the cover grows into the detail cover while the page slides left. Click **All tracks**: the page slides right and the cover shrinks back into its card. On http://localhost:3000/rsc click a card: the page slides, the skeletons drop away and the sections rise in, and the cover does not morph. On http://localhost:3000/suspense type in the filter box: the results crossfade. Press the browser's back button anywhere: no slide, the browser navigation carries no type. Enable **Emulate CSS media feature prefers-reduced-motion** in DevTools and everything snaps. `e2e/view-transitions.spec.ts` records every `document.startViewTransition` call with its types and, with the durations stretched by an injected stylesheet, catches the running animations by name: `vt-blur` proves the morph pair formed on `/revalidate`, `vt-slide-y` the reveal on `/rsc`.
 
-## Step 18: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
+## Step 18: Activity: hide a component instead of destroying it
+
+`{isOpen && <Panel />}` is the reflex for showing and hiding, and it is destructive: unmounting throws away the component's state, its DOM, and anything it had fetched. React's `<Activity>` is the non-destructive version. `mode="hidden"` keeps the children mounted, hides them with `display: none`, and cleans up their Effects, so conceptually they are unmounted, except that everything is still there when you come back.
+
+That buys two separate things, and the component below is built so you can watch both against the unmounting version with one checkbox.
+
+**State and DOM survive.** The draft note is an uncontrolled `<textarea>`: React is not holding that string anywhere, it lives in the DOM node. Unmount the panel and it is gone; hide it and the same node is still in the document with the text still in it. This is why Activity suits tabs, filter panels, and wizards, where throwing away what the user typed is the wrong default.
+
+**Hidden content still renders, so its data arrives early.** Children of a hidden Activity render at a lower priority, and a query underneath one starts while the tab is still hidden. The quick look suspends on `GetTrack` for a track this page has not fetched, so Apollo is already in flight before the first click and there is nothing left to wait for. Note where the Suspense boundary sits: above both Activities, as in React's own example. A hidden Activity that suspends does not trip it, which is what keeps the pre-render invisible.
+
+```tsx
+// src/components/activity-tabs.tsx
+"use client";
+
+import { useSuspenseQuery } from "@apollo/client/react";
+import { Activity, Suspense, useState } from "react";
+import { GetTrackDocument, GetTracksDocument } from "@/__generated__/graphql";
+import { humanReadableTimeFromSeconds } from "@/lib/helpers";
+import { ContentSection } from "./content-section";
+import styles from "./activity-tabs.module.css";
+
+type Tab = "notes" | "quick-look";
+
+/**
+ * React's <Activity>, doing both of the jobs it exists for.
+ *
+ * Conditional rendering destroys a component: `{isOpen && <Panel />}` unmounts it, and its
+ * state and its DOM go with it. <Activity mode="hidden"> keeps the component mounted, hides
+ * it with `display: none`, and tears down its Effects, so it behaves like an unmounted
+ * component that happens to remember everything.
+ *
+ * Two consequences, one checkbox to watch them both:
+ *
+ * 1. State survives. The draft note is an uncontrolled <textarea>, so the text is DOM state
+ *    and nothing in React is holding it. Unmounted, it is gone; hidden, the DOM node is still
+ *    there and so is the draft.
+ * 2. Hidden content still renders, at a lower priority, so a query underneath it starts
+ *    early. The quick look suspends on GetTrack for a track this page has not fetched. While
+ *    the tab is hidden, Apollo is already in flight, so the first click has no fallback to
+ *    show. That is the pre-render the React docs describe, and it is the same idea as this
+ *    route's useBackgroundQuery, moved up to the boundary instead of the hook.
+ *
+ * Note the Suspense boundary sits above both Activities, as in React's own example. A hidden
+ * Activity that suspends does not trip it: that is what makes the pre-render invisible.
+ */
+export function ActivityTabs({ currentTrackId }: { currentTrackId: string }) {
+  const { data } = useSuspenseQuery(GetTracksDocument);
+  const others = data.tracksForHome.filter(({ id }) => id !== currentTrackId);
+  // The last one, not the first: /suspense's TrackPreview defaults to others[0], and sharing a
+  // track between the two demos would let one warm the other's cache and hide the point here.
+  const quickLookId = others.at(-1)?.id ?? currentTrackId;
+
+  const [tab, setTab] = useState<Tab>("notes");
+  const [hideWithActivity, setHideWithActivity] = useState(true);
+
+  return (
+    <ContentSection>
+      <section className={styles.panel} aria-labelledby="activity-tabs-heading">
+        <h4 id="activity-tabs-heading">Hide a tab without unmounting it</h4>
+        <p className={styles.label}>
+          The quick look below has already rendered and fetched its track, even though you have
+          not opened it: look for its GetTrack request in the network tab. Type a draft note,
+          switch tabs and come back, and the draft is still there too. Untick the box to hide by
+          unmounting instead: the hidden panel stops existing, and the draft goes with it.
+        </p>
+
+        <label className={styles.checkbox}>
+          <input
+            type="checkbox"
+            checked={hideWithActivity}
+            onChange={(event) => setHideWithActivity(event.target.checked)}
+          />
+          Hide with &lt;Activity&gt; instead of unmounting
+        </label>
+
+        <div className={styles.tabs} role="tablist" aria-label="Track panel">
+          <TabButton tab="notes" activeTab={tab} onSelect={setTab}>
+            Notes
+          </TabButton>
+          <TabButton tab="quick-look" activeTab={tab} onSelect={setTab}>
+            Quick look
+          </TabButton>
+        </div>
+
+        <div className={styles.panels}>
+          <Suspense fallback={<p className={styles.fallback}>Loading quick look...</p>}>
+            {hideWithActivity ? (
+              <>
+                <Activity mode={tab === "notes" ? "visible" : "hidden"}>
+                  <Notes />
+                </Activity>
+                <Activity mode={tab === "quick-look" ? "visible" : "hidden"}>
+                  <QuickLook trackId={quickLookId} />
+                </Activity>
+              </>
+            ) : (
+              <>
+                {tab === "notes" && <Notes />}
+                {tab === "quick-look" && <QuickLook trackId={quickLookId} />}
+              </>
+            )}
+          </Suspense>
+        </div>
+      </section>
+    </ContentSection>
+  );
+}
+
+function TabButton({
+  tab,
+  activeTab,
+  onSelect,
+  children,
+}: {
+  tab: Tab;
+  activeTab: Tab;
+  onSelect: (tab: Tab) => void;
+  children: string;
+}) {
+  const isActive = tab === activeTab;
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`activity-tab-${tab}`}
+      aria-selected={isActive}
+      aria-controls={`activity-panel-${tab}`}
+      className={styles.tab}
+      data-active={isActive}
+      onClick={() => onSelect(tab)}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Uncontrolled on purpose. The text lives only in the DOM node, so it is the clearest possible
+ * demonstration: React is not holding this value anywhere, and it survives purely because
+ * Activity left the element in the document.
+ */
+function Notes() {
+  return (
+    <div
+      role="tabpanel"
+      id="activity-panel-notes"
+      aria-labelledby="activity-tab-notes"
+      data-testid="activity-notes"
+    >
+      <label className={styles.field}>
+        Draft note
+        <textarea
+          className={styles.textarea}
+          rows={3}
+          placeholder="Type here, switch tabs, come back."
+        />
+      </label>
+    </div>
+  );
+}
+
+function QuickLook({ trackId }: { trackId: string }) {
+  const { data } = useSuspenseQuery(GetTrackDocument, { variables: { trackId } });
+  const { title, author, modulesCount, length, numberOfViews } = data.track;
+
+  return (
+    <div
+      role="tabpanel"
+      id="activity-panel-quick-look"
+      aria-labelledby="activity-tab-quick-look"
+      data-testid="activity-quick-look"
+    >
+      <p className={styles.quickLook}>
+        <strong>{title}</strong> by {author.name}: {modulesCount ?? 0} modules,{" "}
+        {humanReadableTimeFromSeconds(length ?? 0)}, {numberOfViews ?? 0} view(s)
+      </p>
+    </div>
+  );
+}
+```
+
+Render it under the detail on `src/app/background/track/[trackId]/page.tsx`, in its own Suspense boundary so the detail above does not wait for the track list.
+
+This is the same goal as this route's `useBackgroundQuery`, reached from the other end. `useBackgroundQuery` starts a request early by hoisting the hook; Activity starts it early by rendering the whole component early. Reach for the hook when you know exactly which query to warm, and for the boundary when you want a whole subtree ready.
+
+One honest limit, and it is Apollo's rather than React's: unmounting does not reliably send the quick look back to a loading state. Apollo keeps a resolved query ref in its suspense cache for a while after unmount, so remounting inside that window does not suspend. The difference you can always rely on is structural, and it is the one the tests assert: with Activity the hidden panel exists, and without it there is no panel at all.
+
+**Check:** on http://localhost:3000/background/track/c_0, open the Network tab and reload. A `GetTrack` request goes out for a track you have not opened: that is the hidden tab. Type into the draft note, switch to **Quick look** (it appears with no fallback), and switch back: the draft is still there. Untick the box and repeat: the draft is gone, and in the Elements panel the hidden panel is no longer in the document at all. `e2e/activity.spec.ts` asserts all three, and `src/components/activity-tabs.test.tsx` covers the same behaviour in jsdom.
+
+On the `use-cache` branch, Next.js is already doing this for you one level up: with Cache Components it hides whole routes with Activity instead of unmounting them, so page state survives back and forward navigation. This component behaves the same on both branches, because it uses Activity directly rather than relying on the router.
+
+## Step 19: Effects: useLayoutEffect, useEffect, useEffectEvent, and no effect at all
 
 Effects are for synchronizing with something outside React. Most of the code you have written so far needed none, and that is the point of this step: know the cases that do, keep the reactive part of an effect apart from the part that only needs the latest values, and recognize the cases that do not need an effect at all.
 
@@ -3344,7 +3569,7 @@ Not every "latest value" problem is an Effect Event. `src/lib/hooks/use-debounce
 
 **Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation. In the Chrome console, `getEventListeners(window).resize.length` stays at 1 while you navigate between patterns; put `measure` back in the dependency array and watch it get removed and re-added on every click.
 
-## Step 19: Apollo local state: reactive variables and client fields
+## Step 20: Apollo local state: reactive variables and client fields
 
 "How do you handle state that is not on the server?" has two Apollo answers, and the favorites feature uses both.
 
@@ -3499,7 +3724,7 @@ The trade-off between the two reads: the variable works anywhere, the cache fiel
 
 **Check:** on http://localhost:3000/rsc, click a heart: the header badge appears. Switch to useSuspenseQuery with the nav and open that track: the status line reads "In your favorites" through the `@client` field. Reload the page: favorites are gone, because a reactive variable is memory, not storage. `src/components/favorite-status.test.tsx` seeds a cache and proves the field re-renders when the variable changes.
 
-## Step 20: The link chain
+## Step 21: The link chain
 
 Every request from either client goes through the same chain of links. Links run left to right on the way out and right to left on the way back, so the order is part of the design.
 
@@ -3576,12 +3801,12 @@ export function createLinkChain({ uri, headers, fetchOptions }: LinkChainOptions
 
 - `ErrorLink` observes every failure without swallowing it; the hook or the awaiting caller still receives the error.
 - `RetryLink` re-sends transient failures with exponential backoff and jitter. `shouldRetry` is the interesting part: never a mutation (not idempotent), never a GraphQL error (deterministic), never a 4xx (the client's fault).
-- `SetContextLink` merges this client's fixed headers with whatever the operation carried in its own `context.headers`. That per-operation slot is where a session token goes, and it is the only place auth enters the chain: configuring a token on the client itself would mean reading cookies on every operation, which would drag every cached and static route that shares the RSC client into dynamic rendering. The Server Action in Step 21 attaches it at the call site instead. The browser client sets no custom headers at all, because each one would need CORS approval from the API and it has no token to send.
+- `SetContextLink` merges this client's fixed headers with whatever the operation carried in its own `context.headers`. That per-operation slot is where a session token goes, and it is the only place auth enters the chain: configuring a token on the client itself would mean reading cookies on every operation, which would drag every cached and static route that shares the RSC client into dynamic rendering. The Server Action in Step 22 attaches it at the call site instead. The browser client sets no custom headers at all, because each one would need CORS approval from the API and it has no token to send.
 - `HttpLink` performs the request and must be last.
 
 **Check:** open http://localhost:3000/suspense with DevTools offline, then go back online and reload: the console shows the ErrorLink entries and the request succeeds on a retry. `src/lib/apollo/links.test.ts` pins the retry policy.
 
-## Step 21: Authentication: Better Auth, the proxy, and the session in Server Actions
+## Step 22: Authentication: Better Auth, the proxy, and the session in Server Actions
 
 The Odyssey API is public and ignores an `Authorization` header, so nothing in this step can be enforced by the server you talk to. What it shows is everything on the Next.js side of a login: email-and-password sign-in, a session stored as a row and keyed by an HttpOnly cookie, a route kept behind that session by `proxy.ts`, the session read again in a Server Component and in a Server Action, and an API token handed to Apollo per operation. Swap SQLite for Postgres and the upstream for an API that checks bearer tokens, and the shape does not change.
 
@@ -3758,98 +3983,104 @@ const SESSION_UPDATE_AGE = 60 * 60 * 24;
  * `auth.api.getSession({ headers: await headers() })`.
  */
 export const auth = betterAuth({
-  database: authDb,
-  advanced: {
-    database: {
-      /**
-       * Off because this app migrates in-band. The check runs when an instance is created and
-       * compares the schema against the database, which is useful when you apply migrations
-       * out of band and want to be told you forgot. Here `prepareAuthDatabase()` in
-       * instrumentation.ts is that reminder, and it runs on every server start, so the check
-       * can only fire when it is wrong: during `next build`, which imports the routes without
-       * ever starting a server, and in the moment before the migration it is asking for has
-       * finished. A drifted column is added by the next boot either way.
-       */
-      validateSchema: false,
+    database: authDb,
+    advanced: {
+        useSecureCookies: true,
+        defaultCookieAttributes: {
+            httpOnly: true,
+            sameSite: "Lax",
+            secure: true
+        },
+        database: {
+            /**
+             * Off because this app migrates in-band. The check runs when an instance is created and
+             * compares the schema against the database, which is useful when you apply migrations
+             * out of band and want to be told you forgot. Here `prepareAuthDatabase()` in
+             * instrumentation.ts is that reminder, and it runs on every server start, so the check
+             * can only fire when it is wrong: during `next build`, which imports the routes without
+             * ever starting a server, and in the moment before the migration it is asking for has
+             * finished. A drifted column is added by the next boot either way.
+             */
+            validateSchema: false,
+        },
     },
-  },
-  /**
-   * The allowlist is Better Auth's replacement for Auth.js's `trustHost: true`. Hosts on it
-   * may be used to build the request's base URL, and they become trusted origins for the
-   * endpoints' CSRF check; anything else takes the fallback rather than throwing, which keeps
-   * `next dev -p 4000` working. A deployment sets BETTER_AUTH_URL and skips the list.
-   *
-   * No `protocol` here on purpose. It looks like the way to say "this is local development",
-   * but it is read by the cookie builder too, and `"http"` turns off `Secure` and the
-   * `__Secure-` prefix on the session cookie for good: not just in dev, but in a production
-   * deploy that forgot to set BETTER_AUTH_URL, where the object below is what applies. Better
-   * Auth already derives `http://` for loopback hosts, so leaving it out costs nothing in dev
-   * and stops the fallback from being worse than having no fallback at all.
-   */
-  baseURL: process.env.BETTER_AUTH_URL ?? {
-    allowedHosts: ["localhost:3000", "localhost:3001"],
-    fallback: "http://localhost:3000",
-  },
-  emailAndPassword: { enabled: true },
-  /**
-   * Enabling email and password also mounts POST /api/auth/sign-up/email, and the catch-all
-   * route hands it straight to the browser. The Auth.js credentials provider had no such
-   * endpoint, so this is new public surface: anyone could create rows in the demo's SQLite
-   * file. This closes the HTTP route with a 404.
-   *
-   * The check runs in the router's `onRequest`, which only sees requests that arrive over
-   * HTTP, so migrate.ts can still seed the demo user by calling `auth.api.signUpEmail`
-   * in-process. That split is the reason to disable the path rather than the feature:
-   * `emailAndPassword.disableSignUp` would turn off the seed too.
-   */
-  disabledPaths: ["/sign-up/email"],
-  session: {
-    expiresIn: SESSION_EXPIRES_IN,
-    updateAge: SESSION_UPDATE_AGE,
-    additionalFields: {
-      /**
-       * The opaque token the GraphQL API would verify, stored next to the session that owns it.
-       *
-       * Both flags are the point of this field. `returned: false` keeps it out of every
-       * response body, so GET /api/auth/get-session cannot hand it to a script on the page;
-       * `input: false` keeps it out of every request body, so nobody can set their own. That
-       * makes it genuinely server-owned, which is the thing the Auth.js session callback had
-       * no way to express: there, one field added for a Server Action was published to the
-       * browser at the same time.
-       *
-       * Because `returned: false` also hides it from `auth.api.getSession()`, the Server
-       * Action reads it through readAccessToken() in access-token.ts rather than off the
-       * session object. The token never appears in a session payload in any code path.
-       */
-      accessToken: {
-        type: "string",
-        required: false,
-        input: false,
-        returned: false,
-      },
+    /**
+     * The allowlist is Better Auth's replacement for Auth.js's `trustHost: true`. Hosts on it
+     * may be used to build the request's base URL, and they become trusted origins for the
+     * endpoints' CSRF check; anything else takes the fallback rather than throwing, which keeps
+     * `next dev -p 4000` working. A deployment sets BETTER_AUTH_URL and skips the list.
+     *
+     * No `protocol` here on purpose. It looks like the way to say "this is local development",
+     * but it is read by the cookie builder too, and `"http"` turns off `Secure` and the
+     * `__Secure-` prefix on the session cookie for good: not just in dev, but in a production
+     * deploy that forgot to set BETTER_AUTH_URL, where the object below is what applies. Better
+     * Auth already derives `http://` for loopback hosts, so leaving it out costs nothing in dev
+     * and stops the fallback from being worse than having no fallback at all.
+     */
+    baseURL: process.env.BETTER_AUTH_URL ?? {
+        allowedHosts: ["localhost:3000", "localhost:3001"],
+        fallback: "http://localhost:3000",
     },
-  },
-  databaseHooks: {
+    emailAndPassword: { enabled: true },
+    /**
+     * Enabling email and password also mounts POST /api/auth/sign-up/email, and the catch-all
+     * route hands it straight to the browser. The Auth.js credentials provider had no such
+     * endpoint, so this is new public surface: anyone could create rows in the demo's SQLite
+     * file. This closes the HTTP route with a 404.
+     *
+     * The check runs in the router's `onRequest`, which only sees requests that arrive over
+     * HTTP, so migrate.ts can still seed the demo user by calling `auth.api.signUpEmail`
+     * in-process. That split is the reason to disable the path rather than the feature:
+     * `emailAndPassword.disableSignUp` would turn off the seed too.
+     */
+    disabledPaths: ["/sign-up/email"],
     session: {
-      create: {
-        /**
-         * Runs once per sign-in, before the session row is written. This is where the Auth.js
-         * `jwt` callback used to mint the token. A credentials-style login has no identity
-         * provider handing out API tokens, so the demo invents one; it stands in for the
-         * token a real upstream would issue and verify.
-         */
-        before: async (session) => ({
-          data: { ...session, accessToken: crypto.randomUUID() },
-        }),
-      },
+        expiresIn: SESSION_EXPIRES_IN,
+        updateAge: SESSION_UPDATE_AGE,
+        additionalFields: {
+            /**
+             * The opaque token the GraphQL API would verify, stored next to the session that owns it.
+             *
+             * Both flags are the point of this field. `returned: false` keeps it out of every
+             * response body, so GET /api/auth/get-session cannot hand it to a script on the page;
+             * `input: false` keeps it out of every request body, so nobody can set their own. That
+             * makes it genuinely server-owned, which is the thing the Auth.js session callback had
+             * no way to express: there, one field added for a Server Action was published to the
+             * browser at the same time.
+             *
+             * Because `returned: false` also hides it from `auth.api.getSession()`, the Server
+             * Action reads it through readAccessToken() in access-token.ts rather than off the
+             * session object. The token never appears in a session payload in any code path.
+             */
+            accessToken: {
+                type: "string",
+                required: false,
+                input: false,
+                returned: false,
+            },
+        },
     },
-  },
-  /**
-   * Must be last in the array. A Server Action cannot set a cookie by returning a Set-Cookie
-   * header, so this plugin forwards whatever Better Auth wanted to set through Next.js's own
-   * cookies() helper.
-   */
-  plugins: [nextCookies()],
+    databaseHooks: {
+        session: {
+            create: {
+                /**
+                 * Runs once per sign-in, before the session row is written. This is where the Auth.js
+                 * `jwt` callback used to mint the token. A credentials-style login has no identity
+                 * provider handing out API tokens, so the demo invents one; it stands in for the
+                 * token a real upstream would issue and verify.
+                 */
+                before: async (session) => ({
+                    data: { ...session, accessToken: crypto.randomUUID() },
+                }),
+            },
+        },
+    },
+    /**
+     * Must be last in the array. A Server Action cannot set a cookie by returning a Set-Cookie
+     * header, so this plugin forwards whatever Better Auth wanted to set through Next.js's own
+     * cookies() helper.
+     */
+    plugins: [nextCookies()],
 });
 ```
 
@@ -4021,49 +4252,43 @@ import type { NextRequest } from "next/server";
 import { proxyRedirect } from "@/lib/auth/paths";
 
 /**
- * Runs before the matched routes render. `getSessionCookie` only looks for the session cookie;
- * it does not verify the signature and it does not touch the database. That is deliberate on
- * two counts. It is the optimistic check from both the Next.js and the Better Auth auth
- * guides, so it costs no I/O and keeps strangers off /account before anything renders. And the
- * proxy may be deployed to a CDN, which is why the Next.js docs tell you not to rely on shared
- * modules here: a `node:sqlite` handle has no business in this file.
- *
- * So this is not the last line of defense, and it is not meant to be. The page and the Server
- * Action call getSession() again, which does verify and does hit the database. The matcher
- * keeps the proxy off every other route, so the static and cached demos are untouched.
- *
- * It guards /account and nothing else. Sending a signed-in visitor away from /login belongs to
- * the login page, which can verify; deciding that here, on the presence of a cookie, would
- * trap anyone holding one whose session is gone. See proxyRedirect in lib/auth/paths.ts.
- */
+  * Runs before the matched routes render. `getSessionCookie` only looks for the session cookie;
+  * it does not verify the signature and it does not touch the database. That is deliberate on
+  * two counts. It is the optimistic check from both the Next.js and the Better Auth auth
+  * guides, so it costs no I/O and keeps strangers off /account before anything renders. And the
+  * proxy may be deployed to a CDN, which is why the Next.js docs tell you not to rely on shared
+  * modules here: a `node:sqlite` handle has no business in this file.
+  *
+  * So this is not the last line of defense, and it is not meant to be. The page and the Server
+  * Action call getSession() again, which does verify and does hit the database. The matcher
+  * keeps the proxy off every other route, so the static and cached demos are untouched.
+  *
+  * It guards /account and nothing else. Sending a signed-in visitor away from /login belongs to
+  * the login page, which can verify; deciding that here, on the presence of a cookie, would
+  * trap anyone holding one whose session is gone. See proxyRedirect in lib/auth/paths.ts.
+  */
 export function proxy(request: NextRequest) {
-  const { pathname, search } = request.nextUrl;
-  const signedIn = Boolean(getSessionCookie(request));
-  const target = proxyRedirect({ pathname, search, signedIn });
-  const permissionPolicyHeaders = [
-    "camera=()",
-    "microphone=()",
-    "geolocation=()"
-  ]
-  // You would normally NOT do this in proxy in Next.js, you do it in next.config.ts, headers prop
-  const newHeaders = new Headers(request.headers)
-  newHeaders.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload;")
-  newHeaders.set("X-Content-Type-Options", "nosniff")
-  newHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin")
-  newHeaders.set("X-Frame-Options", "DENY")
-  newHeaders.set("Permission-Policy", permissionPolicyHeaders.join(', '))
+    const { pathname, search } = request.nextUrl;
+    const signedIn = Boolean(getSessionCookie(request));
+    const target = proxyRedirect({ pathname, search, signedIn });
 
-  // we want to set our headers
-  return target
-    ? NextResponse.redirect(new URL(target, request.nextUrl.origin), {
-      headers: newHeaders
-    })
-    : NextResponse.next({
-      headers: newHeaders
-    });
+    const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
+    // You would normally NOT do this in proxy in Next.js, you do it in next.config.ts, headers prop
+    const newHeaders = new Headers(request.headers)
+    const csp = `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none'`
+    newHeaders.set("x-nonce", nonce)
+    newHeaders.set("Content-Security-Policy", csp)
+
+    return target
+        ? NextResponse.redirect(new URL(target, request.nextUrl.origin), {
+            headers: newHeaders
+        })
+        : NextResponse.next({
+            headers: newHeaders
+        });
 }
 
-export const config = { matcher: ["/account/:path*"] };
+export const config = { matcher: ["/account/:path*", "/login"] };
 ```
 
 `getSessionCookie` does not verify the cookie or touch the database, and that is correct twice over: it is the optimistic check both auth guides describe, and the Next.js docs warn that `proxy.ts` may be deployed to a CDN and should not rely on shared modules, which a `node:sqlite` handle very much is.
@@ -4324,7 +4549,7 @@ export default async function AccountPage() {
 }
 ```
 
-**The session in a Server Action.** `registerView` from the forms step refuses to run without a session, reads the API token with `readAccessToken`, and passes it to Apollo as per-operation `context`; the `SetContextLink` from Step 20 merges those headers with its own. The token is attached at the call site rather than configured on the client on purpose: reading the session reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it per operation keeps the decision where the session is.
+**The session in a Server Action.** `registerView` from the forms step refuses to run without a session, reads the API token with `readAccessToken`, and passes it to Apollo as per-operation `context`; the `SetContextLink` from Step 21 merges those headers with its own. The token is attached at the call site rather than configured on the client on purpose: reading the session reads cookies, and the RSC client is shared with cached and static routes, where a cookie read is a build error or a silent switch to dynamic rendering. Passing it per operation keeps the decision where the session is.
 
 ```ts
 // src/lib/actions/register-view.ts
@@ -4445,7 +4670,7 @@ export function SignInPrompt({ callbackUrl }: { callbackUrl: string }) {
 
 **Check:** open http://localhost:3000/account: the URL becomes `/login?callbackUrl=%2Faccount` before anything renders (a 307 in the Network tab). Sign in with a wrong password: the message appears and no cookie is set. Sign in with `cadet@catstronauts.dev` and `space-cat`: the account page shows the user and a masked token, and the Server Action response carried a `Set-Cookie` for `better-auth.session_token`, HttpOnly. Now confirm the point of the step: `curl -s -b <cookie> localhost:3000/api/auth/get-session` returns the user and no `accessToken`, while `sqlite3 .auth.sqlite 'select accessToken from session'` shows the token the page just rendered. Open http://localhost:3000/rsc/track/c_0: the register-views form is back and a submit succeeds. Sign out and check the table: the row is gone, not merely the cookie. `e2e/auth.spec.ts` covers the flow, including a replay of a cookie captured before sign-out and the assertion that the session endpoint leaks nothing; flip `returned` to `true` and that one test fails while everything else stays green, which is how quietly the original bug hid. The unit tests cover `proxyRedirect`, the schema, the action (with `signInEmail` mocked and a real `APIError`), the form, and the session and token checks in `registerView`.
 
-## Step 22: Metadata: file conventions and Open Graph images
+## Step 23: Metadata: file conventions and Open Graph images
 
 `generateMetadata` and the title template exist since Step 7. The rest of the metadata story is files next to the layout: Next.js turns them into routes and `<head>` tags on its own.
 
@@ -4567,7 +4792,7 @@ export default async function Image({ params }: { params: Promise<{ trackId: str
 
 **Check:** view the source of http://localhost:3000/rsc/track/c_0: `og:image` points at `/rsc/track/c_0/opengraph-image`. Open that URL: a card with the track's title, author, and thumbnail. `/manifest.webmanifest` returns the manifest. `e2e/metadata.spec.ts` covers all of it.
 
-## Step 23: Errors and retry
+## Step 24: Errors and retry
 
 Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Next 16.3 gives the boundary `retry()`, which re-fetches the route segment; `reset()` would only re-render it.
 
@@ -4639,9 +4864,9 @@ export default function RouteError({
 }
 ```
 
-**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`, a GraphQL error carrying the upstream REST status in its extensions. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 24 adds a test that proves recovery from a transient failure.
+**Check:** open http://localhost:3000/rsc/track/does-not-exist. In development the message is the API's `404: Not Found`, a GraphQL error carrying the upstream REST status in its extensions. In a production build it is React error #441 plus a digest: Next.js redacts Server Component errors. Step 25 adds a test that proves recovery from a transient failure.
 
-## Step 24: Tests
+## Step 25: Tests
 
 Unit tests with Vitest, Testing Library, and happy-dom:
 
@@ -4797,7 +5022,7 @@ pnpm test:e2e         # builds, starts the server, 40 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
-## Step 25: Build and ship
+## Step 26: Build and ship
 
 ```sh
 pnpm build
