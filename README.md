@@ -1415,6 +1415,7 @@ import { GetTrackDocument } from "@/__generated__/graphql";
 import { PageContainer } from "@/components/page-container";
 import { QueryResult } from "@/components/query-result";
 import { TrackDetail } from "@/components/track-detail";
+import { ViewportPanel } from "@/components/viewport-panel";
 
 export default function LegacyTrackPage({ params }: PageProps<"/legacy/track/[trackId]">) {
   const { trackId } = use(params);
@@ -1425,6 +1426,11 @@ export default function LegacyTrackPage({ params }: PageProps<"/legacy/track/[tr
       <QueryResult loading={loading} error={error} data={data}>
         {({ track }) => <TrackDetail track={track} />}
       </QueryResult>
+      {/* Outside the QueryResult: it has no data of its own to wait for, and the contrast is
+          the point. This page's track is missing from the server HTML because useQuery only
+          runs in the browser, while the panel below is rendered on the server from a snapshot
+          the server had to invent. */}
+      <ViewportPanel />
     </PageContainer>
   );
 }
@@ -3555,8 +3561,160 @@ Not every "latest value" problem is an Effect Event. `src/lib/hooks/use-debounce
 | Compute derived state in an effect and store it | Compute it during render | `others` in `TrackPreview`, `active` in `PatternNav` |
 | React to a click or submit in an effect | Do the work in the handler | Both forms and `TrackCard` |
 | Reset state when a prop changes | Give the component a `key` so React remounts it | Add `key={trackId}` to a component that keeps per-track state |
-| Read an external store's value in an effect | `useSyncExternalStore` | The pattern to reach for if the resize listener ever needs the width as state |
+| Read an external store's value in an effect | `useSyncExternalStore` | `src/lib/viewport-store.ts`, read by `ViewportPanel`, below |
 | Notify the parent from an effect | Call the callback in the handler that caused the change | `onOpen` in `TrackCard` |
+
+**`useSyncExternalStore`: state that lives outside React.** The last row deserves its own component, because the App Router makes it sharper than the React docs do. An external store is state React does not own and is not told about: the viewport, `localStorage`, a socket, anything with its own listeners. The instinct is an effect that reads the value and calls `setState`, which renders once with a placeholder and corrects itself after paint, and lets two components reading the same store disagree inside one commit. `useSyncExternalStore` closes both: React reads the store during render and re-checks it before committing.
+
+The store is a plain object, and nothing about it is React-specific.
+
+```ts
+// src/lib/viewport-store.ts
+/**
+ * An external store, in the precise sense `useSyncExternalStore` means: state that lives
+ * outside React and changes without React being told. The viewport is the canonical example.
+ * `matchMedia` owns the value, the browser decides when it changes, and React only finds out
+ * because we subscribe.
+ *
+ * The usual instinct is an Effect: read `window.innerWidth`, `setState`, add a listener. That
+ * works, but it renders once with the wrong value and corrects it after paint, and during
+ * concurrent rendering two components can read the store at different times and disagree
+ * within a single commit. `useSyncExternalStore` exists to close both holes: React reads the
+ * store during render and re-checks it before committing.
+ */
+
+/** Matches the layout's narrow breakpoint. */
+const NARROW = "(max-width: 767px)";
+
+/**
+ * Created on first use, never at module scope. This module is imported by Server Components'
+ * module graph, where `window` does not exist, so touching `matchMedia` on import would crash
+ * the server render. Only `subscribe` and `getSnapshot` reach for it, and React calls neither
+ * on the server.
+ */
+let mediaQuery: MediaQueryList | undefined;
+const media = () => (mediaQuery ??= window.matchMedia(NARROW));
+
+export const viewportStore = {
+  /**
+   * React hands this a callback and expects a clean-up function. One `MediaQueryList` is
+   * shared by every subscriber, so a second component reading this store costs a listener,
+   * not another query.
+   */
+  subscribe(onStoreChange: () => void) {
+    const mql = media();
+    mql.addEventListener("change", onStoreChange);
+    return () => mql.removeEventListener("change", onStoreChange);
+  },
+
+  /**
+   * Must return a value React can compare with `Object.is`, and must return the *same* value
+   * while the store has not changed. A boolean is safe for free. Returning a fresh object or
+   * array here, say `{ isNarrow: mql.matches }`, is the classic way to hang the app: every
+   * render produces a new reference, React concludes the store changed, and it renders again
+   * forever. If you need an object, cache it and only replace it when the source changes.
+   */
+  getSnapshot: () => media().matches,
+
+  /**
+   * Required for server rendering, and the reason this file is worth reading.
+   *
+   * There is no viewport on the server, so there is no honest answer: the server renders one
+   * HTML document that may be hydrated at any width. React uses this value for the server
+   * render and for the hydration render, so it must be a constant. Returning a guess that
+   * disagrees with the client is not a hydration error, it is a lie that renders: React
+   * re-reads `getSnapshot` after hydrating and re-renders with the truth, so the user sees a
+   * flash of the wrong layout.
+   *
+   * So this is a design decision, not a default. `false` means the server always renders the
+   * wide layout, and narrow viewports correct themselves after hydration. Pick the value the
+   * majority of your traffic will hydrate into, and keep layout that must be right on the
+   * first paint in CSS media queries, which need no JavaScript and no snapshot at all.
+   */
+  getServerSnapshot: () => false,
+};
+```
+
+Note what is *not* at module scope. `window.matchMedia` runs on first use, because this module is reachable from the server's module graph and touching `matchMedia` on import would crash the render.
+
+The hook takes three arguments and the third is the one that matters here.
+
+```tsx
+// src/components/viewport-panel.tsx
+"use client";
+
+import { useSyncExternalStore } from "react";
+import { viewportStore } from "@/lib/viewport-store";
+import { ContentSection } from "./content-section";
+import styles from "./viewport-panel.module.css";
+
+/**
+ * Reading an external store the way React wants it read.
+ *
+ * Three arguments, and the third is the one that matters in an App Router app: subscribe,
+ * read, and read-on-the-server. Without `getServerSnapshot` this component throws during SSR
+ * ("Missing getServerSnapshot"), because React has to render the HTML before any browser
+ * exists to ask.
+ *
+ * What you can see here: the server snapshot is a constant, so the HTML always says "wide".
+ * Load this page on a narrow viewport and the readout below flips to "narrow" after
+ * hydration, from the same component, with no Effect and no state. `curl` the page and the
+ * markup still says wide, which is the point: the server rendered a value it could not know.
+ */
+export function ViewportPanel() {
+  const isNarrow = useSyncExternalStore(
+    viewportStore.subscribe,
+    viewportStore.getSnapshot,
+    viewportStore.getServerSnapshot,
+  );
+
+  // Not from the hook: a direct call, so the panel can show what the server committed to
+  // alongside what the browser actually has.
+  const serverRendered = viewportStore.getServerSnapshot() ? "narrow" : "wide";
+  const now = isNarrow ? "narrow" : "wide";
+
+  return (
+    <ContentSection>
+      <section className={styles.panel} aria-labelledby="viewport-panel-heading">
+        <h4 id="viewport-panel-heading">Reading the viewport with useSyncExternalStore</h4>
+        <p className={styles.label}>
+          The viewport lives outside React and changes without telling it. Rather than an Effect
+          that sets state after paint, this subscribes to a <code>matchMedia</code> store and
+          reads it during render. Drag the window across 768px and the readout follows, with no
+          state and no Effect in the component.
+        </p>
+
+        <dl className={styles.readout} data-testid="viewport-store" data-viewport={now}>
+          <div>
+            <dt>Server snapshot</dt>
+            <dd>{serverRendered}</dd>
+          </div>
+          <div>
+            <dt>This browser, now</dt>
+            <dd data-testid="viewport-now">{now}</dd>
+          </div>
+        </dl>
+
+        <p className={styles.label}>
+          The server has no viewport, so <code>getServerSnapshot</code> returns a constant and
+          the HTML always says <strong>wide</strong>. On a narrow screen the two disagree until
+          hydration, then React re-reads the store and corrects it. That flash is the cost of
+          asking JavaScript a question CSS can answer for free, which is why layout that has to
+          be right on first paint belongs in a media query, not here.
+        </p>
+      </section>
+    </ContentSection>
+  );
+}
+```
+
+Render it under `QueryResult` in `src/app/legacy/track/[trackId]/page.tsx`.
+
+**`getServerSnapshot` is not optional, and it is a decision.** Omit it and React throws during SSR: *"Missing getServerSnapshot, which is required for server-rendered content."* It cannot guess, because there is no browser. But supplying it does not make the problem go away, it just moves it somewhere you control: the server emits one HTML document that any screen may hydrate, so whatever constant you return will be wrong for some visitors. React hydrates with the server value, re-reads `getSnapshot`, and re-renders with the truth, which the user sees as a flash of the wrong layout. Choose the value most of your traffic hydrates into, and keep anything that must be correct on first paint in a CSS media query, which needs no JavaScript and no snapshot.
+
+The other trap is `getSnapshot`. It must return the same value, by `Object.is`, for as long as the store has not changed. Returning `{ isNarrow: mql.matches }` builds a new object every call, React decides the store changed, and it renders forever. A boolean is safe for free; an object has to be cached.
+
+**Check:** on http://localhost:3000/legacy/track/c_11, both readouts say **wide** on a desktop. Narrow the window past 768px: **This browser, now** flips to narrow while **Server snapshot** does not, and nothing in the component holds state. Now run `curl -s localhost:3000/legacy/track/c_11 | grep data-viewport` from a terminal: the markup says `wide` no matter what your window is doing, because the server was never asked. `e2e/viewport-store.spec.ts` proves exactly that pair, fetching the HTML with no browser and then loading the same URL in a 480px one. `src/components/viewport-panel.test.tsx` renders it with `renderToString` and no `matchMedia` at all, so if the server render ever reached for the browser the test would throw.
 
 **Check:** on http://localhost:3000/rsc, the bar sits under **RSC query()**. Click another pattern: the bar slides to it and never blinks. Open React DevTools, change `useLayoutEffect` to `useEffect` in `pattern-nav.tsx`, and navigate again with the browser throttled to a slow CPU: a frame without the bar appears. `e2e/layout-effect.spec.ts` checks that the bar's bounding box matches the active link before and after a client navigation. In the Chrome console, `getEventListeners(window).resize.length` stays at 1 while you navigate between patterns; put `measure` back in the dependency array and watch it get removed and re-added on every click.
 

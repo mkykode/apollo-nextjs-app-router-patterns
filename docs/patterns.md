@@ -70,6 +70,7 @@ src/
     apollo/not-found.ts        maps the API's upstream-404 GraphQL error to notFound()
     search.ts                  parse searchParams, filter, paginate, build hrefs
     hooks/use-debounced-callback.ts
+    viewport-store.ts          matchMedia as an external store: subscribe, getSnapshot, getServerSnapshot
     navigation-types.ts        transition type constants (nav-forward, nav-back) for Link and router.push
     auth/auth.ts               the whole Better Auth config and the auth.api surface: database,
                                email+password, the server-owned accessToken field, the
@@ -84,6 +85,7 @@ src/
   types/react-canary.d.ts      pulls in the canary types (ViewTransition) that Next.js's bundled React exports
   components/page-transition.tsx  <ViewTransition> mapping transition types to slide classes; back-link.tsx tags nav-back
   components/activity-tabs.tsx    <Activity>: hidden tabs keep their DOM and pre-render their query
+  components/viewport-panel.tsx   useSyncExternalStore over viewport-store.ts, with the SSR snapshot
   app/login, app/account       sign-in page (Client Component form) and the protected page (getSession again)
   components/user-menu.tsx     getSession in the header, behind Suspense: the per-user hole in the static shell
   app/api/auth/[...all]        Better Auth route handler
@@ -128,6 +130,8 @@ src/
 **Metadata.** `metadataBase` from `NEXT_PUBLIC_SITE_URL`; icons, manifest, and Open Graph images are file conventions in `src/app`. `opengraph-image.tsx` renders with `next/og`; the per-track one is a Route Handler that queries GraphQL through the RSC client.
 
 **Effects.** `src/components/pattern-nav.tsx` measures the active link in `useLayoutEffect` to position a sliding indicator before the browser paints (a hidden-until-measured element makes a plain `useEffect` blink), and subscribes to `resize` in `useEffect` with cleanup. The handler goes through `useEffectEvent` (React 19.2): the subscription is made once, yet it always measures the current pathname. With `measure` as a dependency it would re-subscribe on every navigation; with no dependency and no Effect Event it would measure the first pathname forever. Effect Events are called only from inside effects and never passed around; `src/lib/hooks/use-debounced-callback.ts` is the contrast, a latest-callback ref for a function called from handlers and timers. Nothing else in `src/` needs an effect: data is fetched with Suspense hooks or in Server Components, derived values are computed during render, and work caused by user input happens in the handler.
+
+**External stores.** `src/lib/viewport-store.ts` is the case that row in the effects table points at: state React does not own and is not told about. `ViewportPanel` reads it with `useSyncExternalStore`, so React reads the store during render and re-checks it before committing, instead of an effect that sets state after paint and lets two readers disagree inside one commit. Two things make it an App Router lesson rather than a React one. `getServerSnapshot` is mandatory (omit it and SSR throws `Missing getServerSnapshot`) and it has to be a constant, because one HTML document is hydrated at every screen size: the value you pick is wrong for somebody, React corrects it after hydration, and they see a flash, which is why first-paint layout belongs in a CSS media query instead. And `matchMedia` is reached lazily rather than at module scope, since the module is in the server's graph where `window` does not exist. The other trap is `getSnapshot`, which must be `Object.is`-stable while the store has not changed: a boolean is safe, a fresh object each call renders forever. `e2e/viewport-store.spec.ts` fetches the HTML with no browser and then loads the same URL at 480px to show the two answers.
 
 **Errors.** Suspense hooks and awaited RSC queries throw to the nearest `error.tsx`. `useQuery` returns `error` instead. Passing `errorPolicy: "none"` explicitly narrows `data` to a defined value in TypeScript. The boundary's `retry()` (Next 16.3) re-fetches the segment; `reset()` only re-renders it. One trap: Suspense hooks keep a rejected result in their suspense cache until it auto-disposes (30 s by default), so `retry()` alone re-throws the same error. `error.tsx` refetches the still-watched queries before calling `retry()`; `e2e/error-recovery.spec.ts` proves the recovery by blocking GraphQL during a client-side navigation and lifting the block. In production, errors thrown while rendering Server Components are redacted (React error #441) and only a `digest` reaches the boundary.
 
