@@ -37,7 +37,7 @@ pnpm test:e2e     # Playwright against a production build
 | --- | --- | --- |
 | `course` | The finished Odyssey course app: Vite, React Router, Apollo Client 3 | `git checkout course` |
 | `dynamic` | The rebuild under the classic Next.js rendering model: `export const dynamic`, fetch `revalidate` and tags, route `/revalidate` | `git checkout dynamic` |
-| `use-cache` | The same rebuild under Cache Components: `"use cache"`, `cacheLife`, `cacheTag`, `connection()`, route `/use-cache` | `git checkout use-cache` |
+| `use-cache` | The same rebuild under Cache Components: `"use cache"`, `cacheLife`, `cacheTag`, `io()`, route `/use-cache` | `git checkout use-cache` |
 
 You are reading the `dynamic` branch. The two rendering models cannot coexist in one app, which is why they are branches; `git diff dynamic use-cache -- src` shows everything the model changes.
 
@@ -5175,8 +5175,8 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 25 files, 86 tests
-pnpm test:e2e         # builds, starts the server, 40 tests
+pnpm vitest run       # 25 files, 88 tests
+pnpm test:e2e         # builds, starts the server, 49 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
@@ -5191,10 +5191,11 @@ Read the route table the build prints; every rendering mode of the classic model
 
 | Symbol | Routes | Why |
 | --- | --- | --- |
-| `ƒ (Dynamic)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/api/revalidate`, `/rsc/track/[trackId]/opengraph-image` | `dynamic = "force-dynamic"` in the pattern's layout; route handlers with `POST` or dynamic params are dynamic |
+| `ƒ (Dynamic)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/login`, `/account`, `/api/auth/[...all]`, `/api/feedback`, `/api/revalidate`, `/rsc/track/[trackId]/opengraph-image` | `dynamic = "force-dynamic"` in the pattern's layout; `/login` and `/account` read the session cookie; route handlers with `POST` or dynamic params are dynamic |
 | `○ (Static)` | `/`, `/legacy`, `/legacy/track/[trackId]`, `/opengraph-image`, `/manifest.webmanifest`, `/apple-icon.png` | `dynamic = "error"` and `dynamic = "force-static"`; nothing fetches on the server; metadata files prerender |
-| `○ (Static)` with `1m` | `/revalidate` | `revalidate = 60` on the page segment: ISR |
-| `● (SSG)` with `1m` | `/revalidate/track/c_0` … | `generateStaticParams` prerendered every track; each fetch is cached for a minute under its tag |
+| `○ (Static)` with `1m 1y` | `/revalidate` | `revalidate = 60` on the page segment: ISR. The `Expire` column is `expireTime`, how long a CDN may serve the stale copy while revalidating; unset here, so a year |
+| `● (SSG)` with `1m 1y` | `/revalidate/track/c_0` … | `generateStaticParams` prerendered every track; each fetch is cached for a minute under its tag |
+| `ƒ Proxy (Middleware)` | `src/proxy.ts` | Runs before the routes in its `matcher` |
 
 This is the classic rendering model. Next.js 16's Cache Components (`cacheComponents: true`) inverts it: everything is dynamic unless a function or component says `"use cache"`, with `cacheLife` and `cacheTag` replacing `revalidate` and `next.tags`, and the `dynamic` segment config disappears. The `use-cache` branch of this repo shows the same app under that model.
 

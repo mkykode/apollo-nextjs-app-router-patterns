@@ -50,7 +50,7 @@ Never read the same data from both. RSC data is frozen in the markup, client dat
 ```
 src/
   app/
-    layout.tsx                 root layout: fonts, header, ApolloWrapper, footer. force-dynamic
+    layout.tsx                 root layout: fonts, header, ApolloWrapper, footer
     page.tsx                   index of the patterns
     loading.tsx                route-level Suspense boundary
     error.tsx                  route-level error boundary
@@ -76,11 +76,12 @@ src/
                                email+password, the server-owned accessToken field, the
                                session-create hook that mints it, the nextCookies() plugin
     auth/db.ts                 the node:sqlite handle; auth/migrate.ts creates the schema and seeds the demo user
+    auth/session.ts            getSession: auth.api.getSession over the request headers (server-only)
     auth/access-token.ts       reads the session's API token by session token (server-only)
     auth/paths.ts              protected prefixes, safe redirect paths, sign-in href, the proxy's redirect decision
     actions/auth.ts            authenticate (useActionState shape) and signOutAction
     schemas/login.ts           Zod schema shared by the form and the action
-  proxy.ts                     getSessionCookie + proxyRedirect, matched to /account only
+  proxy.ts                     getSessionCookie + proxyRedirect; matched to /account and /login, redirects only for /account
   instrumentation.ts           runs the auth migration and seed once, before the first request
   types/react-canary.d.ts      pulls in the canary types (ViewTransition) that Next.js's bundled React exports
   components/page-transition.tsx  <ViewTransition> mapping transition types to slide classes; back-link.tsx tags nav-back
