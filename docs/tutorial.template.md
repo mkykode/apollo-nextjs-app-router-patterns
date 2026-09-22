@@ -432,7 +432,7 @@ Add `src/app/background/layout.tsx` with the same `io()` layout as @@step(Patter
 
 @@include(src/app/legacy/track/[trackId]/page.tsx)@@
 
-No layout here: nothing fetches on the server, so a fully static spinner shell is correct, and the build output shows `○ (Static)`.
+No layout here: nothing fetches on the server, so the spinner shell is prerendered with no data in it. The build still marks the route `◐ (Partial Prerender)`, like every page, because the header's user menu streams the session in behind the shell; the page itself contributes nothing dynamic.
 
 **Check:** `curl -s http://localhost:3000/legacy | grep -c "Cat-stronomy"` prints `0`, and `curl -s http://localhost:3000/legacy | grep -c progressbar` prints `1`: the HTML has the spinner, not the data. In the browser, the Network tab shows a GraphQL request after hydration.
 
@@ -450,7 +450,7 @@ Everything so far streams at request time. Cache Components cache at the functio
 
 @@include(src/lib/data/tracks.ts)@@
 
-The detail page also exports `generateStaticParams`, which runs the list query once at build. Combined with the cached function, every known track page is fully static; unknown ids render on first request.
+The detail page also exports `generateStaticParams`, which runs the list query once at build. Combined with the cached function, every known track page has its data baked in at build, which is the `1m 1h` next to each `/use-cache/track/c_*` path in the route table; unknown ids render on first request.
 
 @@include(src/app/use-cache/track/[trackId]/page.tsx)@@
 
@@ -876,8 +876,8 @@ The suite in `e2e/patterns.spec.ts` checks, per pattern, that the list renders a
 **Check:**
 
 ```sh
-pnpm vitest run       # 25 files, 86 tests
-pnpm test:e2e         # builds, starts the server, 40 tests
+pnpm vitest run       # 25 files, 88 tests
+pnpm test:e2e         # builds, starts the server, 49 tests
 E2E_PORT=3100 pnpm test:e2e   # when a dev server holds port 3000
 ```
 
@@ -892,10 +892,11 @@ Read the route table the build prints; every rendering mode of Cache Components 
 
 | Symbol | Routes | Why |
 | --- | --- | --- |
-| `◐ (Partial Prerender)` | `/rsc`, `/suspense`, `/preload`, `/background` and their detail pages, `/legacy/track/[trackId]` | The shell is static HTML; uncached data (or `params`) streams in at request time under `loading.tsx` |
-| `○ (Static)` | `/`, `/legacy`, `/opengraph-image`, `/manifest.webmanifest`, `/apple-icon.png` | Nothing reads request-time data or fetches on the server; metadata files prerender |
-| `○ (Static)` with `1m 1h` | `/use-cache`, `/use-cache/track/c_0` … | Page-level `"use cache"` with the `minutes` profile; `generateStaticParams` plus the cached function with the custom `track` profile |
-| `ƒ (Dynamic)` | `/api/revalidate`, `/rsc/track/[trackId]/opengraph-image` | Route handlers with `POST` or dynamic params are dynamic |
+| `◐ (Partial Prerender)` | every page: `/`, `/login`, `/account`, `/rsc`, `/suspense`, `/preload`, `/background`, `/legacy` and their detail pages | The shell is static HTML; uncached data (or `params`) streams in at request time under `loading.tsx`. The header's user menu reads the session on every route, so no page is `○`; before the auth step, `/` and `/legacy` were |
+| `◐ (Partial Prerender)` with `1m 1h` | `/use-cache`, `/use-cache/track/c_0` … | Page-level `"use cache"` with the `minutes` profile; `generateStaticParams` plus the cached function with the custom `track` profile. The cached page is the shell, the user menu is the hole in it |
+| `○ (Static)` | `/opengraph-image`, `/manifest.webmanifest`, `/apple-icon.png` | Metadata files read nothing at request time |
+| `ƒ (Dynamic)` | `/api/auth/[...all]`, `/api/revalidate`, `/rsc/track/[trackId]/opengraph-image` | Route handlers with `POST` or dynamic params are dynamic |
+| `ƒ Proxy (Middleware)` | `src/proxy.ts` | Runs before the cache for the routes in its `matcher` |
 
 Nothing had to be marked dynamic; the two `io()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"`, `/revalidate` uses segment `revalidate` and fetch `next.revalidate` instead of `"use cache"`, and `dynamic = "force-static"` / `"error"` guard the static routes.
 

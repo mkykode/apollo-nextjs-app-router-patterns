@@ -50,7 +50,7 @@ Never read the same data from both. RSC data is frozen in the markup, client dat
 ```
 src/
   app/
-    layout.tsx                 root layout: fonts, header, ApolloWrapper, footer. force-dynamic
+    layout.tsx                 root layout: fonts, header, ApolloWrapper, footer
     page.tsx                   index of the patterns
     loading.tsx                route-level Suspense boundary
     error.tsx                  route-level error boundary
@@ -68,6 +68,8 @@ src/
     apollo/cache.ts            InMemoryCache factory with the Track.isFavorite @client field policy
     apollo/favorites.ts        reactive variable for favorites
     apollo/not-found.ts        maps the API's upstream-404 GraphQL error to notFound()
+    data/tracks.ts             the "use cache" track reader with the custom cacheLife profile and cacheTag
+    cache-tags.ts              the tag names that reader, the /use-cache page, and the Server Action share
     search.ts                  parse searchParams, filter, paginate, build hrefs
     hooks/use-debounced-callback.ts
     viewport-store.ts          matchMedia as an external store: subscribe, getSnapshot, getServerSnapshot
@@ -76,6 +78,7 @@ src/
                                email+password, the server-owned accessToken field, the
                                session-create hook that mints it, the nextCookies() plugin
     auth/db.ts                 the node:sqlite handle; auth/migrate.ts creates the schema and seeds the demo user
+    auth/session.ts            getSession: auth.api.getSession over the request headers (server-only)
     auth/access-token.ts       reads the session's API token by session token (server-only)
     auth/paths.ts              protected prefixes, safe redirect paths, sign-in href, the proxy's redirect decision
     actions/auth.ts            authenticate (useActionState shape) and signOutAction

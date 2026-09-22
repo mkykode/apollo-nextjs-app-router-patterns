@@ -13,8 +13,10 @@ type Props = PageProps<"/use-cache/track/[trackId]">;
 
 /**
  * Prerender a page per track at build time. generateStaticParams runs the list query once
- * during `next build`; combined with the cached data function, every known track page is
- * fully static. Ids not in the list render on first request (dynamicParams defaults to true).
+ * during `next build`; combined with the cached data function, every known track page has its
+ * data baked in (the `1m 1h` next to each path in the route table). The route still reads
+ * `◐`, because the header's user menu streams the session in behind that shell. Ids not in
+ * the list render on first request; see the note below.
  */
 export async function generateStaticParams() {
   const { data } = await query({ query: GetTracksDocument, errorPolicy: "none" });
