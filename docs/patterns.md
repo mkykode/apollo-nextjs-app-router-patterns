@@ -141,8 +141,8 @@ src/
 | --- | --- | --- |
 | `"use cache"` on a page + `cacheLife("minutes")` + `cacheTag` | `src/app/use-cache/page.tsx` | The page's rendered output is cached across requests with a built-in profile |
 | `"use cache"` on a function + custom `cacheLife("track")` + `cacheTag` | `src/lib/data/tracks.ts`, profile in `next.config.ts` | The track data is memoized per id; `stale` / `revalidate` / `expire` are explicit |
-| `generateStaticParams` | `src/app/use-cache/track/[trackId]/page.tsx` | Every known track page is fully static at build; unknown ids render on demand |
-| `connection()` | `src/app/{suspense,background}/layout.tsx`, both `/preload` pages | Force request-time rendering where Next.js cannot detect it: the SSR fetch through the browser-side Apollo link, and `PreloadQuery`'s `crypto.randomUUID()` |
+| `generateStaticParams` | `src/app/use-cache/track/[trackId]/page.tsx` | Every known track page is prerendered at build with its cached data; unknown ids render on demand |
+| `io()` | `src/app/{suspense,background}/layout.tsx`, both `/preload` pages | Keep work Next.js cannot see out of the static shell: the SSR fetch through the browser-side Apollo link, and `PreloadQuery`'s `crypto.randomUUID()`. Preferred over `connection()`, which also blocks prefetches and anything cached below it |
 | `<Suspense>` in the shell | `src/components/header.tsx` | `usePathname()` is runtime data inside the shared shell; the links prerender, the active state streams |
 | `updateTag` | `src/lib/actions/increment-track-views.ts` | Expire a tag immediately (read-your-own-writes), Server Actions only |
 | `revalidatePath` | same file | Regenerate the cached list page on its next request; unchanged from the classic model |

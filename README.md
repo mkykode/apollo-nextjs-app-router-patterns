@@ -6,7 +6,7 @@ By the end you will be able to:
 
 - set up the two Apollo Client instances an App Router app needs, and explain why there are two
 - fetch in a Server Component with `query()`, in a Client Component with `useSuspenseQuery`, hand a request from server to client with `PreloadQuery`, avoid waterfalls with `useBackgroundQuery`, and say when `useQuery` is still the right tool
-- use every caching lever of Cache Components on purpose: `"use cache"` on a function and on a page, built-in and custom `cacheLife` profiles, `cacheTag`, `generateStaticParams`, `connection()`, and the three invalidation APIs `updateTag`, `revalidatePath`, and `revalidateTag`
+- use every caching lever of Cache Components on purpose: `"use cache"` on a function and on a page, built-in and custom `cacheLife` profiles, `cacheTag`, `generateStaticParams`, `io()`, and the three invalidation APIs `updateTag`, `revalidatePath`, and `revalidateTag`
 - run a mutation with `useMutation` and with a Server Action, from a click and from a form, validate with one Zod schema on both sides, and let the normalized cache do the update
 - keep search and pagination in the URL so the server can read them, and know when component state with `useDeferredValue` is the better fit
 - stream independent sections behind content-shaped skeletons, scope `loading.tsx` with a route group, and turn an API miss into a real 404
@@ -37,7 +37,7 @@ pnpm test:e2e     # Playwright against a production build
 | --- | --- | --- |
 | `course` | The finished Odyssey course app: Vite, React Router, Apollo Client 3 | `git checkout course` |
 | `dynamic` | The rebuild under the classic Next.js rendering model: `export const dynamic`, fetch `revalidate` and tags, route `/revalidate` | `git checkout dynamic` |
-| `use-cache` | The same rebuild under Cache Components: `"use cache"`, `cacheLife`, `cacheTag`, `connection()`, route `/use-cache` | `git checkout use-cache` |
+| `use-cache` | The same rebuild under Cache Components: `"use cache"`, `cacheLife`, `cacheTag`, `io()`, route `/use-cache` | `git checkout use-cache` |
 
 You are reading the `use-cache` branch. The two rendering models cannot coexist in one app, which is why they are branches; `git diff dynamic use-cache -- src` shows everything the model changes.
 
@@ -1018,7 +1018,7 @@ export function useIncrementTrackViews() {
 }
 ```
 
-A root `loading.tsx` is the Suspense boundary. The shell streams first, the data follows. On this branch it has to sit at the root: Cache Components require a boundary above every read of request-time data, and the pattern layouts read it with `connection()` (next step), so the boundary must be above the layouts. The `dynamic` branch moves it into the pattern folders to keep a real 404 status possible on non-streamed routes; here the prerendered shell makes that moot.
+A root `loading.tsx` is the Suspense boundary. The shell streams first, the data follows. On this branch it has to sit at the root: Cache Components require a boundary above every read of request-time data, and the pattern layouts read it with `io()` (next step), so the boundary must be above the layouts. The `dynamic` branch moves it into the pattern folders to keep a real 404 status possible on non-streamed routes; here the prerendered shell makes that moot.
 
 ```tsx
 // src/app/loading.tsx
@@ -1028,7 +1028,7 @@ import { PageContainer } from "@/components/page-container";
 /**
  * Root Suspense boundary. On this branch it stays at the root on purpose: Cache Components
  * need a boundary above every read of request-time data, and the pattern layouts read it
- * (`await connection()`), so the boundary has to sit above them. The list and the RSC detail
+ * (`await io()`), so the boundary has to sit above them. The list and the RSC detail
  * route override it with skeleton-shaped loading.tsx files of their own.
  */
 export default function RouteLoading() {
@@ -1040,21 +1040,27 @@ export default function RouteLoading() {
 }
 ```
 
-This pattern needs one extra file, and the reason is subtle. Its SSR request goes through the Client Component link, which Cache Components cannot see, so the build would treat the route as fully static and bake the data in (try it: remove the file and read the build output). A layout that awaits `connection()` defers everything below it to request time:
+This pattern needs one extra file, and the reason is subtle. Its SSR request goes through the Client Component link, which Cache Components cannot see, so the build would treat the route as fully static and bake the data in (try it: remove the file and read the build output). A layout that awaits `io()` keeps everything below it out of the static shell. `io()` (Next.js 16.3) suspends during prerendering and resolves at once on a request, which is all this needs. The older answer was `connection()`, and it still works, but it stays suspended until a real user navigation reaches the server, so it also blocks prefetches and any `"use cache"` content below it; the docs now say to prefer `io()` and keep `connection()` for the rare case where rendering must wait for a real user request.
 
 ```tsx
 // src/app/suspense/layout.tsx
-import { connection } from "next/server";
+import { io } from "next/cache";
 import type { ReactNode } from "react";
 
 /**
  * The SSR pass of these Client Components fetches through the browser-side Apollo link, which
  * Cache Components cannot see, so the route would be prerendered at build with stale data.
- * connection() defers everything below it to request time; the root loading.tsx is the
- * Suspense boundary that keeps the shell prerenderable.
+ * `await io()` suspends during prerendering and resolves at once on a request, so everything
+ * below it stays out of the static shell; the root loading.tsx is the Suspense boundary that
+ * keeps the shell prerenderable.
+ *
+ * Not connection(). It excludes the subtree from the shell just the same, but it stays
+ * suspended until a real user navigation reaches the server, so it also blocks prefetches and
+ * anything cached below it. Nothing here needs a real user request, only a real request, and
+ * for that the docs say to prefer io().
  */
 export default async function SuspenseLayout({ children }: { children: ReactNode }) {
-  await connection();
+  await io();
   return children;
 }
 ```
@@ -1117,7 +1123,7 @@ Form one: start the query in RSC, read it with `useSuspenseQuery` using the same
 
 ```tsx
 // src/app/preload/page.tsx
-import { connection } from "next/server";
+import { io } from "next/cache";
 import { Suspense } from "react";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { Loading } from "@/components/loading";
@@ -1134,8 +1140,10 @@ import { TracksClient } from "./tracks-client";
  */
 export default async function PreloadTracksPage() {
   // PreloadQuery mints a request-scoped queryRef id with crypto.randomUUID(), which Cache
-  // Components reject during prerendering. connection() defers this render to request time.
-  await connection();
+  // Components reject during prerendering. io() is the documented call for exactly this read:
+  // it suspends during prerendering and is a no-op on a request, and unlike connection() it
+  // does not hold the render until a real user navigation, so prefetches still work.
+  await io();
 
   return (
     <PageContainer grid>
@@ -1173,7 +1181,7 @@ Form two: the render prop hands a `queryRef` to the child, which reads it with `
 
 ```tsx
 // src/app/preload/track/[trackId]/page.tsx
-import { connection } from "next/server";
+import { io } from "next/cache";
 import { Suspense } from "react";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { Loading } from "@/components/loading";
@@ -1189,7 +1197,7 @@ import { TrackClient } from "./track-client";
 export default async function PreloadTrackPage({ params }: PageProps<"/preload/track/[trackId]">) {
   const { trackId } = await params;
   // Same reason as the list page: PreloadQuery cannot run during prerendering.
-  await connection();
+  await io();
 
   return (
     <PageContainer>
@@ -1240,7 +1248,7 @@ export function TrackClient({ queryRef }: TrackClientProps) {
 }
 ```
 
-Data that arrives this way is client data. Never read it from a Server Component; the integration creates a separate client for `PreloadQuery` to make that hard to do by accident. Note the `await connection()` in both pages: `PreloadQuery` mints a request-scoped id with `crypto.randomUUID()`, which Cache Components reject during prerendering, and `connection()` is the documented way to move that render to request time.
+Data that arrives this way is client data. Never read it from a Server Component; the integration creates a separate client for `PreloadQuery` to make that hard to do by accident. Note the `await io()` in both pages: `PreloadQuery` mints a request-scoped id with `crypto.randomUUID()`, which Cache Components reject during prerendering. That is the exact example in the `io()` reference: call it before reading a value like `Math.random()` or `crypto.randomUUID()`, and the read stays out of the static shell without holding the route hostage to a real user navigation the way `connection()` would.
 
 **Check:** open http://localhost:3000/preload/track/c_0. Note the view count. Increment it from outside the app:
 
@@ -1332,7 +1340,7 @@ function TrackReader({ queryRef }: { queryRef: QueryRef<GetTrackQuery> }) {
 }
 ```
 
-Add `src/app/background/layout.tsx` with the same `connection()` layout as @@step(Pattern 2: `useSuspenseQuery` and streaming SSR)@@.
+Add `src/app/background/layout.tsx` with the same `io()` layout as @@step(Pattern 2: `useSuspenseQuery` and streaming SSR)@@.
 
 **Check:** http://localhost:3000/background behaves like @@step(Pattern 2: `useSuspenseQuery` and streaming SSR)@@: data in the SSR HTML, no browser GraphQL request after load.
 
@@ -5229,7 +5237,7 @@ Read the route table the build prints; every rendering mode of Cache Components 
 | `○ (Static)` with `1m 1h` | `/use-cache`, `/use-cache/track/c_0` … | Page-level `"use cache"` with the `minutes` profile; `generateStaticParams` plus the cached function with the custom `track` profile |
 | `ƒ (Dynamic)` | `/api/revalidate`, `/rsc/track/[trackId]/opengraph-image` | Route handlers with `POST` or dynamic params are dynamic |
 
-Nothing had to be marked dynamic; the two `connection()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"`, `/revalidate` uses segment `revalidate` and fetch `next.revalidate` instead of `"use cache"`, and `dynamic = "force-static"` / `"error"` guard the static routes.
+Nothing had to be marked dynamic; the two `io()` layouts exist only because the Client Component patterns fetch through a link Next.js cannot observe. Compare with the `dynamic` branch, where the same routes are `ƒ (Dynamic)` because of `export const dynamic = "force-dynamic"`, `/revalidate` uses segment `revalidate` and fetch `next.revalidate` instead of `"use cache"`, and `dynamic = "force-static"` / `"error"` guard the static routes.
 
 The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, and the build on every push.
 
@@ -5250,7 +5258,7 @@ The `.github/workflows/ci.yml` on this branch runs lint, typecheck, unit tests, 
 - Apollo local state: reactive variables for anything, `@client` fields through a field policy where the entity is in the cache; codegen learns them from a client schema.
 - The link chain is a pipeline: observe errors, retry only what is safe, attach headers, then send.
 - Metadata is mostly files: icons, manifest, and Open Graph images, with `metadataBase` making URLs absolute.
-- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` (built-in or custom profile) and `cacheTag` cache a function or a page across requests, `generateStaticParams` prerenders known paths, `connection()` forces request-time rendering where Next.js cannot detect it, and three invalidation APIs exist: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
+- Under Cache Components nothing is cached by default. `"use cache"` plus `cacheLife` (built-in or custom profile) and `cacheTag` cache a function or a page across requests, `generateStaticParams` prerenders known paths, `io()` keeps work Next.js cannot see out of the static shell (`connection()` does too, but blocks prefetches; keep it for renders that must wait for a real user request), and three invalidation APIs exist: `updateTag` (immediate, Server Actions), `revalidatePath` (by route), `revalidateTag(tag, "max")` (stale-while-revalidate, also from route handlers).
 
 Where to go next: read [docs/patterns.md](docs/patterns.md) for the talking points, diff this branch against `dynamic` to see everything the rendering model changes, then try Apollo's data masking with `useFragment` and `@defer` with `SSRMultipartLink`.
 

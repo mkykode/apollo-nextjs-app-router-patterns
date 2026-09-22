@@ -1,4 +1,4 @@
-import { connection } from "next/server";
+import { io } from "next/cache";
 import { Suspense } from "react";
 import { GetTracksDocument } from "@/__generated__/graphql";
 import { Loading } from "@/components/loading";
@@ -15,8 +15,10 @@ import { TracksClient } from "./tracks-client";
  */
 export default async function PreloadTracksPage() {
   // PreloadQuery mints a request-scoped queryRef id with crypto.randomUUID(), which Cache
-  // Components reject during prerendering. connection() defers this render to request time.
-  await connection();
+  // Components reject during prerendering. io() is the documented call for exactly this read:
+  // it suspends during prerendering and is a no-op on a request, and unlike connection() it
+  // does not hold the render until a real user navigation, so prefetches still work.
+  await io();
 
   return (
     <PageContainer grid>

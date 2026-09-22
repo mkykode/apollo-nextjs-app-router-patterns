@@ -1,4 +1,4 @@
-import { connection } from "next/server";
+import { io } from "next/cache";
 import { Suspense } from "react";
 import { GetTrackDocument } from "@/__generated__/graphql";
 import { Loading } from "@/components/loading";
@@ -14,7 +14,7 @@ import { TrackClient } from "./track-client";
 export default async function PreloadTrackPage({ params }: PageProps<"/preload/track/[trackId]">) {
   const { trackId } = await params;
   // Same reason as the list page: PreloadQuery cannot run during prerendering.
-  await connection();
+  await io();
 
   return (
     <PageContainer>
