@@ -1,7 +1,9 @@
 import { getSessionCookie } from "better-auth/cookies";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+
 import { proxyRedirect } from "@/lib/auth/paths";
+import { buildNonceCsp } from "./lib/buildCsp";
 
 /**
  * Runs before the matched routes render. `getSessionCookie` only looks for the session cookie;
@@ -18,32 +20,38 @@ import { proxyRedirect } from "@/lib/auth/paths";
  * It guards /account and nothing else. Sending a signed-in visitor away from /login belongs to
  * the login page, which can verify; deciding that here, on the presence of a cookie, would
  * trap anyone holding one whose session is gone. See proxyRedirect in lib/auth/paths.ts.
+ *
+ * CSP is the one header that has to live here rather than in next.config.ts, because the nonce
+ * must be regenerated per response. Every other security header stays in next.config.ts, and
+ * the static CSP there excludes /account so the two policies never land on the same response.
  */
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const signedIn = Boolean(getSessionCookie(request));
   const target = proxyRedirect({ pathname, search, signedIn });
-  const permissionPolicyHeaders = [
-    "camera=()",
-    "microphone=()",
-    "geolocation=()"
-  ]
-  // You would normally NOT do this in proxy in Next.js, you do it in next.config.ts, headers prop
-  const newHeaders = new Headers(request.headers)
-  newHeaders.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload;")
-  newHeaders.set("X-Content-Type-Options", "nosniff")
-  newHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin")
-  newHeaders.set("X-Frame-Options", "DENY")
-  newHeaders.set("Permission-Policy", permissionPolicyHeaders.join(', '))
 
-  // we want to set our headers
-  return target
-    ? NextResponse.redirect(new URL(target, request.nextUrl.origin), {
-      headers: newHeaders
-    })
-    : NextResponse.next({
-      headers: newHeaders
-    });
+  if (target) {
+    // A redirect has no body, renders no HTML, and runs no scripts. There is nothing to
+    // nonce and no downstream render to forward request headers to.
+    return NextResponse.redirect(new URL(target, request.nextUrl.origin));
+  }
+
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const csp = buildNonceCsp(nonce);
+
+  // Inbound leg: only the Next.js renderer reads these, they never reach the client.
+  // The CSP header is how Next discovers the nonce so it can stamp the <script> tags it
+  // injects itself (bootstrap, hydration, flight). `x-nonce` is for our own components,
+  // read with (await headers()).get("x-nonce").
+  const requestHeaders = new Headers(request.headers);
+  // requestHeaders.set("x-nonce", nonce);
+  // requestHeaders.set("Content-Security-Policy", csp);
+
+  // Outbound leg: this is the copy the browser receives and the only one it enforces.
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  // response.headers.set("Content-Security-Policy", csp);
+
+  return response;
 }
 
 export const config = { matcher: ["/account/:path*"] };

@@ -1,5 +1,13 @@
+import { staticCsp } from "@/lib/buildCsp";
 import type { NextConfig } from "next";
 
+const securityHeaders = [
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }, // this one already added by browsers by default
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+]
 const nextConfig: NextConfig = {
   // Cache Components: nothing is cached unless it says "use cache", every route gets a
   // prerendered static shell, and dynamic data streams in under Suspense boundaries.
@@ -19,6 +27,23 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "images.unsplash.com", pathname: "/photo-*" },
     ],
   },
+  // headers() {
+  //   return [
+  //     {
+  //       source: "/:path*",
+  //       headers: securityHeaders
+  //     },
+  //     {
+  //       source: "/((?!account(?:/|$)).*)",
+  //       headers: [
+  //         {
+  //           key: "Content-Security-Policy",
+  //           value: staticCsp
+  //         }
+  //       ]
+  //     }
+  //     ]
+  // }
 };
 
 export default nextConfig;

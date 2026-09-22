@@ -1,0 +1,23 @@
+
+export const products = [
+  { name: "Aurora Desk Lamp", category: "Lighting", price: 89 },
+  { name: "Basalt Pour-Over Kettle", category: "Kitchen", price: 74 },
+  { name: "Canvas Weekender Bag", category: "Travel", price: 168 },
+  { name: "Drift Linen Duvet", category: "Bedding", price: 245 },
+  { name: "Ember Cast Iron Skillet", category: "Kitchen", price: 62 },
+  { name: "Fjord Wool Throw", category: "Bedding", price: 130 },
+  { name: "Grove Ceramic Planter", category: "Decor", price: 38 },
+  { name: "Harbor Deck Chair", category: "Furniture", price: 310 },
+  { name: "Inlet Glass Carafe", category: "Kitchen", price: 44 },
+  { name: "Juniper Scented Candle", category: "Decor", price: 29 },
+  { name: "Kiln Stoneware Mug", category: "Kitchen", price: 22 },
+  { name: "Lumen Floor Lamp", category: "Lighting", price: 195 },
+  { name: "Meridian Wall Clock", category: "Decor", price: 96 },
+  { name: "Nomad Leather Journal", category: "Office", price: 54 },
+  { name: "Oxbow Walnut Stool", category: "Furniture", price: 220 },
+  { name: "Pine Ridge Cutting Board", category: "Kitchen", price: 68 },
+  { name: "Quarry Marble Coasters", category: "Decor", price: 35 },
+  { name: "Ridgeline Packing Cubes", category: "Travel", price: 48 },
+  { name: "Slate Desk Organizer", category: "Office", price: 57 },
+  { name: "Tidepool Bath Towel Set", category: "Bath", price: 112 },
+]
